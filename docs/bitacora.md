@@ -31,13 +31,23 @@ Orden sugerido, **a confirmar**: 04 → 05 → 07 → 06 → 03 → 08.
 - Los carriles (04, 05) y el key lock (07) cambian lo que suena, así que conviene tenerlos antes de exportar (03).
 - Los proyectos (08) van al final, cuando el modelo de datos ya no cambie y no haya que migrar formatos guardados.
 
+## Probar la app
+
+- **Publicada:** https://diegochoqueramirez.github.io/d-mixer/. Cada merge a `main` la vuelve a desplegar con el workflow "Deploy to GitHub Pages" (tarda menos de un minuto). Se puede comprobar con `gh run list`.
+- **En local, desde el celular:** `npx vite --host` y abrir `https://<IP del Mac>:5173/d-mixer/` aceptando el certificado autofirmado (ver SPEC 09).
+- **Avisos al probar en el iPhone:**
+  - Si la app ya estaba abierta, recargar la página para no usar la versión vieja que guarda Safari.
+  - Si no se oye nada, desactivar el modo silencio del iPhone. El arreglo va en la SPEC 10.
+  - La playlist solo vive en memoria: al recargar hay que volver a añadir las canciones desde Archivos. Guardarla va en la SPEC 08.
+
 ---
 
 ## Bitácora
 
 ### 2026-10-28 — SPEC 11: Editor de transición al estilo Spotify, con onda grande y zoom
 
-- **Estado:** implementado y subido a `main` mediante pull request. El usuario la cerró como `Implementado` y los criterios se marcaron en `[x]`.
+- **Estado:** implementado y fusionado en `main` con el [PR #3](https://github.com/diegochoqueramirez/d-mixer/pull/3) (squash `6dec1cf`). El usuario la cerró como `Implementado` y los criterios se marcaron en `[x]`. La rama `spec-11-onda-grande-con-zoom` se borró en local y en remoto.
+- **Publicada:** el despliegue a GitHub Pages del merge terminó bien. Se comprobó que la versión publicada ya trae el editor nuevo (hoja de compases y carrusel de carriles).
 - **Qué se hizo:**
   - **Pantalla:**
     - el editor ocupa toda la pantalla (480 px de ancho en escritorio, a toda la altura);
@@ -74,12 +84,14 @@ Orden sugerido, **a confirmar**: 04 → 05 → 07 → 06 → 03 → 08.
     - Personalizar con anillos, "Personalizada ✓" al mover un punto y salida con "Listo".
     - Con 16 compases sin zoom se ve un pico por clic; en el zoom máximo cada clic es un pico estrecho.
     - Movimiento reducido. Sin errores en consola, salvo el 404 de `favicon.ico`, que ya existía.
-  - **No cubierto por la emulación** (el usuario cerró la spec sin pedir otra prueba):
-    - comparar capturas con las de Spotify;
-    - pellizco real en Safari sin zoom de la página;
-    - deslizar el carrusel y cerrar las tarjetas con el dedo;
+  - **Pendiente en el iPhone**, con la versión publicada (ver "Probar la app"). La emulación no lo cubre y el usuario cerró la spec antes de probarlo:
+    - que pellizcar sobre las ondas no amplíe la página en Safari;
+    - deslizar entre las tarjetas de carril y cerrarlas hacia abajo con el dedo;
     - fluidez del escenario con canciones reales;
-    - pellizco del trackpad en Safari de macOS.
+    - comparar capturas del editor con las de Spotify;
+    - en el Mac, que el pellizco del trackpad en Safari amplíe el escenario y no la página.
+
+    Si algo falla, se anota aquí y se corrige en una spec nueva o en un arreglo aparte.
 
 ### 2026-10-28 — SPEC 09: Interfaz móvil estilo iOS
 
