@@ -13,7 +13,7 @@ import { createToast } from './ui/toast';
 async function loadTrack(id: string, file: File) {
   try {
     const buffer = await decodeFile(file);
-    updateTrack(id, { buffer, duration: buffer.duration, peaks: computePeaks(buffer), status: 'analyzing' });
+    updateTrack(id, { buffer, duration: buffer.duration, ...computePeaks(buffer), status: 'analyzing' });
     const tempo = await detectTempo(buffer);
     updateTrack(id, tempo ? { ...tempo, status: 'ready' } : { status: 'bpm-required' });
   } catch {
@@ -31,6 +31,7 @@ function addFiles(files: File[]) {
     bpm: null,
     firstBeatOffset: 0,
     peaks: null,
+    finePeaks: null,
     status: 'decoding',
   }));
   setState((s) => ({ tracks: [...s.tracks, ...added] }));

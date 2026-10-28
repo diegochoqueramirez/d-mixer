@@ -9,6 +9,7 @@ export function track(id: string, overrides: Partial<Track> = {}): Track {
     bpm: 120,
     firstBeatOffset: 0,
     peaks: null,
+    finePeaks: null,
     status: 'ready',
     ...overrides,
   };

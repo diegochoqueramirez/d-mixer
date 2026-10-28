@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { getState, pairKey, removeTrack, restoreTrack, setState } from './state';
+import { beginGesture, cancelGesture, endGesture, getState, openEditor, pairKey, removeTrack, restoreTrack, setState, undo, updateDraft } from './state';
 import { track, transition } from './lib/fixtures';
 
 describe('removeTrack / restoreTrack', () => {
@@ -37,5 +37,48 @@ describe('removeTrack / restoreTrack', () => {
     restoreTrack(removed);
     restoreTrack(removed);
     expect(getState().tracks.map((t) => t.id)).toEqual(['a', 'b', 'c']);
+  });
+});
+
+describe('gestures', () => {
+  beforeEach(() => {
+    const saved = transition('a', 'b', { outStart: 200, inStart: 0 });
+    setState({ tracks: [track('a'), track('b')], transitions: { [pairKey('a', 'b')]: saved }, editor: null });
+    openEditor(0);
+  });
+
+  it('records a whole drag as one undo step', () => {
+    beginGesture();
+    updateDraft({ outStart: 202 });
+    updateDraft({ outStart: 204 });
+    updateDraft({ outStart: 206 });
+    endGesture();
+    expect(getState().editor?.past).toHaveLength(1);
+    undo();
+    expect(getState().editor?.draft.outStart).toBe(200);
+  });
+
+  it('cancelGesture puts the draft and both histories back', () => {
+    updateDraft({ inStart: 2 });
+    undo();
+    const before = getState().editor!;
+    expect(before.future).toHaveLength(1);
+    beginGesture();
+    updateDraft({ outStart: 202 });
+    updateDraft({ outStart: 204 });
+    cancelGesture();
+    const after = getState().editor!;
+    expect(after.draft).toEqual(before.draft);
+    expect(after.past).toEqual(before.past);
+    expect(after.future).toEqual(before.future);
+    expect(after.dirty).toBe(false);
+  });
+
+  it('cancelGesture without changes leaves the editor as it was', () => {
+    const before = getState().editor!;
+    beginGesture();
+    cancelGesture();
+    expect(getState().editor!.draft).toEqual(before.draft);
+    expect(getState().editor!.past).toEqual([]);
   });
 });

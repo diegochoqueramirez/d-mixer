@@ -24,7 +24,7 @@ Documento vivo: qué se ha implementado, qué falta y qué ideas hay para el fut
 | [ ] | 08 | Proyectos guardables (retomar donde lo dejaste) | 01 y el modelo de datos final | Pendiente |
 | [x] | [09](../specs/09-interfaz-movil-ios.md) | Interfaz móvil estilo iOS con animaciones (Motion), compatible con Android | 01, 02, 04, 05 | Implementado (en `main`) |
 | [ ] | 10 | App instalable (PWA) y audio en iOS | 09 | Pendiente |
-| [ ] | 11 | Onda grande con zoom en el editor de transición | 09 | Pendiente |
+| [x] | [11](../specs/11-onda-grande-con-zoom.md) | Editor de transición al estilo Spotify, con onda grande y zoom | 01, 02, 09 | Implementado (en `main`) |
 
 Orden sugerido, **a confirmar**: 04 → 05 → 07 → 06 → 03 → 08.
 
@@ -34,6 +34,52 @@ Orden sugerido, **a confirmar**: 04 → 05 → 07 → 06 → 03 → 08.
 ---
 
 ## Bitácora
+
+### 2026-10-28 — SPEC 11: Editor de transición al estilo Spotify, con onda grande y zoom
+
+- **Estado:** implementado y subido a `main` mediante pull request. El usuario la cerró como `Implementado` y los criterios se marcaron en `[x]`.
+- **Qué se hizo:**
+  - **Pantalla:**
+    - el editor ocupa toda la pantalla (480 px de ancho en escritorio, a toda la altura);
+    - barra superior de una fila (✕ · "1 de 3" · Guardar en verde) y barra inferior con ↶ ↷ y ‹ ›;
+    - cabeceras de 56 px; los minimapas aparecen en su lugar mientras se toca una onda.
+  - **Escenario:**
+    - de borde a borde, `clamp(220px, 35dvh, 520px)`, ventana al 72% y proporciones 6 / 41 / 6 / 41 / 6;
+    - A se atenúa después de la ventana y B antes; sin marcos; rejilla dentro del panel con compases en `--bar-line`;
+    - reproducir como pastilla gris y fila inferior (−) [8 compases ▾] (+);
+    - flechas de nudge solo en la onda activa.
+  - **Picos finos** de 5 ms (`Track.finePeaks`); los 2000 de los minimapas se derivan de ellos en la misma pasada.
+  - **Zoom:** de la vista completa a 2 beats de A; pellizco y recorrido con dos dedos, botones, Ctrl/⌘ + rueda, rueda horizontal, `gesturechange` de Safari y teclas `-` `+` `=`; indicador de scroll arriba; vuelve a la vista completa al abrir y al cambiar de transición; se desactiva en Personalizar.
+  - **Hojas:** hoja de compases (1 a 16) que queda abierta; presets en una fila con scroll, con "Personalizado" y "✦ Auto"; filas de carril y tarjetas con lista y ✓ en carrusel; modo hoja con el escenario arriba; Personalizar desde la tarjeta con ↶ ↷ y "Listo"; puntos como anillos.
+  - **Historial:** un arrastre de onda es un solo paso (`beginGesture` / `endGesture`). `cancelGesture` lo deshace al apoyar el segundo dedo.
+- **Archivos nuevos:** `src/lib/zoom.ts` (+ test), `src/audio/loader.test.ts`, `src/ui/stageZoom.ts`, `src/ui/barsSheet.ts` y `src/ui/laneSheets.ts`.
+- **Decisiones durante la implementación:**
+  - **`Esc` / "Atrás" cerraban el editor entero.** Chrome solo deja rechazar el evento `cancel` del `<dialog>` una vez por activación del usuario. Después de cambiar algo, a veces llegaba sin poder cancelarse y el diálogo se cerraba solo, con el editor todavía abierto en el estado. Ahora, si el diálogo se cierra sin que lo pida la app, se vuelve a abrir; el manejador de `cancel` ya hizo lo que tocaba (cerrar la tarjeta o preguntar). Es probable que esto ya pasara desde la SPEC 09.
+  - `createStage` recibe dos parámetros opcionales más que los de la spec (`onDragStart` y `onDragCancel`) para abrir y cancelar el gesto de historial.
+  - Al pasar a otra tarjeta del carrusel con Personalizar activo, se sale de Personalizar: el modo pertenece a la tarjeta donde empezó.
+  - Con una tarjeta abierta, los atajos `[` `]` no cambian de transición (la barra inferior está oculta).
+  - Las flechas de nudge usan los iconos ‹ › de anterior y siguiente.
+  - `.stage-view` lleva `overflow-x: clip`: el área táctil de la flecha derecha sobresalía 4 px y dejaba mover el editor de lado.
+  - Las filas de carril y las opciones de las tarjetas se iluminan al tocarlas en lugar de encogerse, como las filas de la SPEC 09.
+- **Verificación:**
+  - 185 tests pasan (28 nuevos), `tsc` sin errores y `vite build` compila. JS: 60,5 → 65,8 kB comprimido.
+  - Probado en Chromium con Playwright, emulación táctil por CDP y tres WAV sintéticos con un clic en cada beat. Para Playwright se levantó el proyecto por HTTP con una configuración temporal fuera del repo, porque el certificado autofirmado de `basic-ssl` no se acepta.
+    - A 393 × 852 el panel mide 283 × 298 px (Spotify: 286 × 301 pt).
+    - Alto del escenario: 295 px a 390 × 844, 220 px en horizontal y 280 px a 1280 × 800. Sin scroll horizontal a 320, 375, 390, 393, 412 y 844 px.
+    - Pellizco (×2,1) y recorrido con dos dedos; arrastre de un dedo con snap; minimapas que se ocultan a los 2 s y flechas a los 3 s.
+    - El segundo dedo devuelve la onda a su punto y no deja paso en el historial; un arrastre se deshace con un solo "Deshacer".
+    - Botones, teclas y Ctrl + rueda; "+" se desactiva en ×22 con 8 compases.
+    - Hoja de compases: queda abierta, el toque fuera solo la cierra, `Esc`.
+    - Tarjetas: elegir estilo, carrusel, tocar la tarjeta que asoma, cerrar deslizando y con `Esc`, Looping sin "Personalizar".
+    - Personalizar con anillos, "Personalizada ✓" al mover un punto y salida con "Listo".
+    - Con 16 compases sin zoom se ve un pico por clic; en el zoom máximo cada clic es un pico estrecho.
+    - Movimiento reducido. Sin errores en consola, salvo el 404 de `favicon.ico`, que ya existía.
+  - **No cubierto por la emulación** (el usuario cerró la spec sin pedir otra prueba):
+    - comparar capturas con las de Spotify;
+    - pellizco real en Safari sin zoom de la página;
+    - deslizar el carrusel y cerrar las tarjetas con el dedo;
+    - fluidez del escenario con canciones reales;
+    - pellizco del trackpad en Safari de macOS.
 
 ### 2026-10-28 — SPEC 09: Interfaz móvil estilo iOS
 
@@ -334,7 +380,7 @@ Orden sugerido, **a confirmar**: 04 → 05 → 07 → 06 → 03 → 08.
 
 ---
 
-## SPEC 11 — Onda grande con zoom en el editor de transición
+## SPEC 11 — Editor de transición al estilo Spotify, con onda grande y zoom
 
 **Objetivo tentativo:** Ver las ondas de A y B en grande y con zoom horizontal en el editor, para encajar el beat de la transición con precisión (como el editor de Spotify Mix).
 
@@ -345,7 +391,21 @@ Orden sugerido, **a confirmar**: 04 → 05 → 07 → 06 → 03 → 08.
 - **Fluidez:** no es prioridad; está bien que el arrastre salte de beat en beat.
 - **Motivo:** hoy la ventana ocupa siempre el 60% del ancho del escenario. Con 8 compases a 390 px cada beat mide unos 7 px y los golpes quedan pegados; más altura sola no lo resuelve.
 
-**Preguntas abiertas:**
+**Spec escrita:** [specs/11-onda-grande-con-zoom.md](../specs/11-onda-grande-con-zoom.md). Las preguntas de abajo se respondieron allí.
+
+**Cambio tras ver capturas de Spotify Mix (2026-10-28):** el usuario aportó 10 capturas del editor de Spotify en iPhone y pidió parecerse lo más posible en pantalla, tamaño de las ondas y controles que abren submenús. La SPEC 11 pasó a cubrir todo el editor:
+
+- pantalla completa, ondas de borde a borde, escenario de 35dvh y ventana al 72% (antes 50dvh y 60%);
+- barra superior de una fila y barra inferior con ↶ ↷ y ‹ ›;
+- minimapas en lugar de las cabeceras mientras se toca una onda;
+- atenúa solo lo que no suena, sin marcos en cada onda y con la rejilla dentro del panel;
+- pastilla de compases con hoja de botones, y "−" / "+" a sus lados;
+- flechas de nudge solo en la onda activa y botón de reproducir gris;
+- presets en una fila con scroll, filas de carriles y tarjetas con la lista y ✓ en carrusel, modo hoja con el escenario arriba, y Personalizar desde la tarjeta.
+
+Por un momento estos controles se separaron como SPEC 12, pero el usuario pidió tenerlos en esta spec y se fusionaron. La onda de colores por frecuencia y el rediseño de las cabeceras se descartaron.
+
+**Preguntas abiertas (respondidas en la spec):**
 
 - Niveles de zoom (mínimo y máximo) y si el zoom se recuerda entre transiciones.
 - Cómo conviven pellizcar, deslizar la onda para cambiar el punto de salida o entrada, y recorrer la onda con zoom.
@@ -365,8 +425,8 @@ Salieron en la investigación o en las specs como "fuera de alcance". **No entra
   - Spotify Connect (no aplica a archivos locales).
 - **Del editor:**
   - Transición de la última canción a la primera.
-  - Ondas coloreadas por frecuencia (naranja, azul y blanco en la captura).
-  - Zoom manual de la vista alineada.
+  - Ondas coloreadas por frecuencia: azul para graves, naranja para medios y blanco para agudos, como la 3Band de rekordbox. Se consideró en la SPEC 11 y el usuario la dejó fuera.
+  - Zoom manual de la vista alineada → SPEC 11.
   - Seek y pausa durante la reproducción.
   - Compases que no sean 4/4.
 - **De curvas (SPEC 02):**
