@@ -1,0 +1,57 @@
+type Attrs = Record<string, string | number | boolean | undefined>;
+
+export function h<K extends keyof HTMLElementTagNameMap>(
+  tag: K,
+  attrs: Attrs = {},
+  ...children: (Node | string)[]
+): HTMLElementTagNameMap[K] {
+  const el = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value === undefined || value === false) continue;
+    if (key === 'class') el.className = String(value);
+    else el.setAttribute(key, value === true ? '' : String(value));
+  }
+  el.append(...children);
+  return el;
+}
+
+const ICONS = {
+  play: '<path d="M8 5.5v13l10.5-6.5z"/>',
+  stop: '<rect x="6.5" y="6.5" width="11" height="11" rx="1.5"/>',
+  up: '<path d="M12 7l-6 6.5h12z"/>',
+  down: '<path d="M12 17l6-6.5H6z"/>',
+  remove: '<path d="M7 7l10 10M17 7L7 17" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
+  prev: '<path d="M14.5 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  next: '<path d="M9.5 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  add: '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
+};
+
+export type IconName = keyof typeof ICONS;
+
+export function icon(name: IconName): SVGSVGElement {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = `<svg class="icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">${ICONS[name]}</svg>`;
+  return tpl.content.firstElementChild as SVGSVGElement;
+}
+
+export function setIcon(button: HTMLElement, name: IconName): void {
+  button.querySelector('svg.icon')?.replaceWith(icon(name));
+}
+
+/** 201.4 -> "3:21.40" */
+export function formatTime(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = seconds - m * 60;
+  return `${m}:${s.toFixed(2).padStart(5, '0')}`;
+}
+
+/** 240 -> "04:00" */
+export function formatDuration(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+export function formatBpm(bpm: number): string {
+  return Number.isInteger(bpm) ? String(bpm) : bpm.toFixed(1);
+}
