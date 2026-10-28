@@ -1,4 +1,5 @@
-import type { BarsOption, GainCurve, VolumeCurves } from '../types';
+import type { BarsOption, EditLane, GainCurve, SideCurves } from '../types';
+import type { LaneScale } from '../lib/lanes';
 import { BEATS_PER_BAR } from '../lib/timing';
 import { addPoint, bendForMidValue, deletePoint, isFull, movePoint, segmentMid, setBend, snapX, toggleEase } from '../lib/gainCurve';
 import { h } from './dom';
@@ -7,6 +8,8 @@ import type { Stage } from './waveform';
 type Lane = 'out' | 'in';
 const LANES: Lane[] = ['out', 'in'];
 const LANE_NAMES: Record<Lane, string> = { out: 'curva de salida', in: 'curva de entrada' };
+/** What a point's value means in each edited lane. */
+const VALUE_NAMES: Record<EditLane, string> = { volume: 'volumen', eq: 'graves', filter: 'cierre' };
 
 /** Seconds moved by `,` and `.` (fine nudge, no snap). */
 const FINE_NUDGE_SECONDS = 0.01;
@@ -15,7 +18,12 @@ const GAIN_STEP_LARGE = 0.25;
 const BEND_STEP = 0.1;
 
 export interface CurveEditorModel {
-  curves: VolumeCurves;
+  /** Lane being edited; its colour and the meaning of the values follow it. */
+  lane: EditLane;
+  /** Curve of each song; null = the lane leaves that song alone, so it has no points. */
+  curves: SideCurves;
+  /** Where values sit on each song's waveform. */
+  scales: Record<Lane, LaneScale>;
   bars: BarsOption;
   /** Transition length in mix seconds. */
   d: number;
@@ -62,7 +70,9 @@ export function createCurveEditor(stage: Stage, handlers: CurveEditorHandlers): 
   const points: Record<Lane, HTMLButtonElement[]> = { out: [], in: [] };
   const handles: Record<Lane, HTMLButtonElement[]> = { out: [], in: [] };
 
-  const curveOf = (lane: Lane) => model!.curves[lane];
+  const curveOf = (lane: Lane) => model!.curves[lane]!;
+  /** +1 where higher values sit higher up (keys ↑ raise them), −1 where they sit lower (low-pass). */
+  const direction = (lane: Lane) => Math.sign(model!.scales[lane].one - model!.scales[lane].zero) || 1;
   const lastIndex = (lane: Lane) => curveOf(lane).points.length - 1;
   /** Segment acted on from a point: the one after it, or the one before for the last point. */
   const segmentFrom = (lane: Lane, index: number) => (index < lastIndex(lane) ? index : index - 1);
@@ -72,21 +82,22 @@ export function createCurveEditor(stage: Stage, handlers: CurveEditorHandlers): 
     handlers.onChange(lane, curve);
   }
 
-  /** Converts a pointer position into window-relative (x, gain) for a lane. */
+  /** Converts a pointer position into window-relative (x, value) for a lane, following its scale. */
   function toCurve(lane: Lane, clientX: number, clientY: number) {
     const g = stage.geometry();
-    if (!g) return null;
+    if (!g || !model) return null;
     const rect = el.getBoundingClientRect();
     const box = g.lanes[lane];
+    const { zero, one } = model.scales[lane];
     const x = (clientX - rect.left - g.x0) / (g.x1 - g.x0);
-    const y = 1 - (clientY - rect.top - box.top - g.pad) / (box.height - 2 * g.pad);
-    return { x, y };
+    const height = 1 - (clientY - rect.top - box.top - g.pad) / (box.height - 2 * g.pad);
+    return { x, y: (height - zero) / (one - zero) };
   }
 
   function describePoint(lane: Lane, index: number) {
     const p = curveOf(lane).points[index];
     const beats = p.x * model!.bars * BEATS_PER_BAR;
-    return `Punto ${index + 1} de ${curveOf(lane).points.length} de la ${LANE_NAMES[lane]}: beat ${beats.toFixed(1)}, volumen ${Math.round(p.y * 100)}%`;
+    return `Punto ${index + 1} de ${curveOf(lane).points.length} de la ${LANE_NAMES[lane]}: beat ${beats.toFixed(1)}, ${VALUE_NAMES[model!.lane]} ${Math.round(p.y * 100)}%`;
   }
 
   function describeHandle(lane: Lane, index: number) {
@@ -149,7 +160,7 @@ export function createCurveEditor(stage: Stage, handlers: CurveEditorHandlers): 
 
   for (const lane of LANES) {
     areas[lane].addEventListener('dblclick', (e) => {
-      if (!model) return;
+      if (!model || !model.curves[lane]) return;
       const pos = toCurve(lane, e.clientX, e.clientY);
       if (!pos || pos.x <= 0 || pos.x >= 1) return;
       add(lane, e.shiftKey ? pos.x : snapX(pos.x, model.bars));
@@ -188,7 +199,7 @@ export function createCurveEditor(stage: Stage, handlers: CurveEditorHandlers): 
         break;
       case 'ArrowUp':
       case 'ArrowDown': {
-        const step = e.shiftKey ? GAIN_STEP_LARGE : GAIN_STEP;
+        const step = (e.shiftKey ? GAIN_STEP_LARGE : GAIN_STEP) * direction(lane);
         keep(movePoint(c, index, p.x, p.y + (e.key === 'ArrowUp' ? step : -step)));
         break;
       }
@@ -225,7 +236,8 @@ export function createCurveEditor(stage: Stage, handlers: CurveEditorHandlers): 
     const c = curveOf(lane);
     const keep = (curve: GainCurve) => change(lane, curve, { lane, kind: 'handle', index });
     if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
-      keep(setBend(c, index, c.segments[index].bend + (e.key === 'ArrowUp' ? BEND_STEP : -BEND_STEP)));
+      const step = BEND_STEP * direction(lane);
+      keep(setBend(c, index, c.segments[index].bend + (e.key === 'ArrowUp' ? step : -step)));
     } else if (e.key === 'Enter') {
       keep(toggleEase(c, index));
     } else {
@@ -257,7 +269,8 @@ export function createCurveEditor(stage: Stage, handlers: CurveEditorHandlers): 
   function syncButtons() {
     if (!model) return;
     for (const lane of LANES) {
-      const c = curveOf(lane);
+      // A song the lane leaves alone gets no buttons.
+      const c = model.curves[lane] ?? { points: [], segments: [] };
       while (points[lane].length < c.points.length) points[lane].push(makeButton(lane, 'point'));
       while (points[lane].length > c.points.length) points[lane].pop()!.remove();
       while (handles[lane].length < c.segments.length) handles[lane].push(makeButton(lane, 'handle'));
@@ -289,9 +302,12 @@ export function createCurveEditor(stage: Stage, handlers: CurveEditorHandlers): 
     const w = g.x1 - g.x0;
     for (const lane of LANES) {
       const box = g.lanes[lane];
-      const yAt = (y: number) => box.top + g.pad + (1 - y) * (box.height - 2 * g.pad);
+      const { zero, one } = model.scales[lane];
+      const yAt = (y: number) => box.top + g.pad + (1 - (zero + y * (one - zero))) * (box.height - 2 * g.pad);
       Object.assign(areas[lane].style, { left: `${g.x0}px`, width: `${w}px`, top: `${box.top}px`, height: `${box.height}px` });
-      const c = curveOf(lane);
+      areas[lane].hidden = !model.curves[lane];
+      const c = model.curves[lane];
+      if (!c) continue;
       points[lane].forEach((b, i) => {
         const p = c.points[i];
         b.style.left = `${g.x0 + p.x * w}px`;
@@ -312,6 +328,7 @@ export function createCurveEditor(stage: Stage, handlers: CurveEditorHandlers): 
       model = next;
       active = isActive && next !== null;
       el.hidden = !active;
+      if (next) el.dataset.lane = next.lane;
       if (!active) {
         drag = null;
         return;

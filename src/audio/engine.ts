@@ -1,4 +1,5 @@
 import type { TimelineEntry } from '../types';
+import { laneChain, scheduleNoise } from './laneNodes';
 
 const START_LATENCY = 0.08;
 /** Fade at each loop edge so restarting the preview does not click. */
@@ -9,6 +10,9 @@ const LOOP_LOOKAHEAD = 0.5;
 interface Voice {
   source: AudioBufferSourceNode;
   gain: GainNode;
+  /** EQ, filter and noise nodes, plus the noise source; empty when the track plays untouched. */
+  extra: AudioNode[];
+  extraSources: AudioBufferSourceNode[];
 }
 
 interface Iteration {
@@ -34,7 +38,22 @@ function schedule(c: AudioContext, entries: TimelineEntry[], buffers: Map<string
     const source = c.createBufferSource();
     source.buffer = buffers.get(entry.trackId) ?? null;
     const gain = c.createGain();
-    source.connect(gain).connect(out);
+    const lanes = laneChain(c, entry, base);
+    if (lanes) {
+      source.connect(lanes.input);
+      lanes.output.connect(gain);
+    } else {
+      source.connect(gain);
+    }
+    gain.connect(out);
+    const extra = lanes?.nodes ?? [];
+    const extraSources: AudioBufferSourceNode[] = [];
+    if (entry.noiseOut) {
+      // Noise goes after the volume gain, so it does not fade with the outgoing song.
+      const noise = scheduleNoise(c, entry.noiseOut, base, out);
+      extra.push(...noise.nodes);
+      extraSources.push(noise.source);
+    }
 
     for (const e of entry.rateEvents) {
       const at = base + e.time;
@@ -50,7 +69,7 @@ function schedule(c: AudioContext, entries: TimelineEntry[], buffers: Map<string
 
     source.start(base + entry.contextStart, entry.offset);
     source.stop(base + entry.stopAt);
-    return { source, gain };
+    return { source, gain, extra, extraSources };
   });
 }
 
@@ -111,13 +130,16 @@ export function stop(): void {
   clearTimeout(timer);
   for (const it of iterations) {
     for (const v of it.voices) {
-      try {
-        v.source.stop();
-      } catch {
-        // already stopped
+      for (const source of [v.source, ...v.extraSources]) {
+        try {
+          source.stop();
+        } catch {
+          // already stopped
+        }
+        source.disconnect();
       }
-      v.source.disconnect();
       v.gain.disconnect();
+      for (const node of v.extra) node.disconnect();
     }
     if (ctx && it.out !== ctx.destination) it.out.disconnect();
   }

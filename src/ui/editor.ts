@@ -1,4 +1,4 @@
-import type { AppState, BarsOption, Track, TransitionPreset, VolumeStyle } from '../types';
+import type { AppState, BarsOption, EditLane, EqStyle, FilterStyle, Track, TransitionPreset, VolumeStyle } from '../types';
 import { BARS_OPTIONS, PRESET_ORDER, VOLUME_STYLES } from '../types';
 import {
   applyPreset,
@@ -12,13 +12,16 @@ import {
   resetCurve,
   resetToAuto,
   saveDraft,
+  setEqStyle,
+  setFilterStyle,
   setVolumeStyle,
   toggleCustomize,
   undo,
   updateCustomCurve,
   updateDraft,
 } from '../state';
-import { chipLabel, PRESETS, VOLUME_LABELS, volumeSamples } from '../lib/curves';
+import { chipLabel, PRESETS, VOLUME_LABELS } from '../lib/curves';
+import { EQ_LABELS, EQ_STYLES, FILTER_LABELS, FILTER_STYLES, filterShape, laneLines, laneScale } from '../lib/lanes';
 import type { PairValidation } from '../lib/validation';
 import { barsToSeconds, playbackRateFor } from '../lib/timing';
 import { formatBpm, formatDuration, formatTime, h, icon, setIcon } from './dom';
@@ -60,6 +63,37 @@ function createDeck(role: 'out' | 'in'): Deck {
     h('div', { class: 'deck-side' }, bpm, duration),
   );
   return { root, name, point, bpm, duration };
+}
+
+const EDIT_LANES: EditLane[] = ['volume', 'eq', 'filter'];
+
+interface LaneRow {
+  el: HTMLElement;
+  select: HTMLSelectElement;
+  customOption: HTMLOptionElement;
+  customizeBtn: HTMLButtonElement;
+  resetBtn: HTMLButtonElement;
+}
+
+/** One lane of the editor: its style select, "Personalizar" / "Listo" and "Restablecer curva". */
+function createLaneRow(lane: EditLane, label: string, options: [string, string][], onStyle: (value: string) => void): LaneRow {
+  const id = `editor-${lane}`;
+  const select = h('select', { class: 'pill-select', id });
+  for (const [value, text] of options) select.append(h('option', { value }, text));
+  const customOption = h('option', { value: 'custom', disabled: true }, 'Personalizada');
+  select.append(customOption);
+  const customizeBtn = h('button', { class: 'pill-btn customize-btn', type: 'button', 'aria-pressed': 'false' }, 'Personalizar');
+  const resetBtn = h('button', { class: 'pill-btn', type: 'button' }, 'Restablecer curva');
+  select.addEventListener('change', () => onStyle(select.value));
+  customizeBtn.addEventListener('click', () => toggleCustomize(lane));
+  resetBtn.addEventListener('click', () => resetCurve(lane));
+  const el = h(
+    'div',
+    { class: 'lane-row', 'data-lane': lane },
+    h('label', { class: 'lane-label', for: id }, label),
+    h('div', { class: 'lane-actions' }, select, customizeBtn, resetBtn),
+  );
+  return { el, select, customOption, customizeBtn, resetBtn };
 }
 
 export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers): EditorView {
@@ -119,18 +153,11 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
     presets.append(b);
   }
 
-  const volume = h('select', { class: 'pill-select', id: 'editor-volume' });
-  for (const v of VOLUME_STYLES) volume.append(h('option', { value: v }, VOLUME_LABELS[v]));
-  const customOption = h('option', { value: 'custom', disabled: true }, 'Personalizada');
-  volume.append(customOption);
-  const customizeBtn = h('button', { class: 'pill-btn customize-btn', type: 'button', 'aria-pressed': 'false' }, 'Personalizar');
-  const resetCurveBtn = h('button', { class: 'pill-btn', type: 'button' }, 'Restablecer curva');
-  const volumeLane = h(
-    'div',
-    { class: 'lane-row' },
-    h('label', { class: 'lane-label', for: 'editor-volume' }, 'Volumen'),
-    h('div', { class: 'lane-actions' }, volume, customizeBtn, resetCurveBtn),
-  );
+  const rows: Record<EditLane, LaneRow> = {
+    volume: createLaneRow('volume', 'Volumen', VOLUME_STYLES.map((v) => [v, VOLUME_LABELS[v]]), (v) => setVolumeStyle(v as VolumeStyle)),
+    eq: createLaneRow('eq', 'EQ', EQ_STYLES.map((v) => [v, EQ_LABELS[v]]), (v) => setEqStyle(v as EqStyle)),
+    filter: createLaneRow('filter', 'Filtro', FILTER_STYLES.map((v) => [v, FILTER_LABELS[v]]), (v) => setFilterStyle(v as FilterStyle)),
+  };
 
   const issues = h('ul', { class: 'issues', 'aria-live': 'polite' });
 
@@ -148,7 +175,10 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   const popover = createBpmPopover();
 
   const curveEditor = createCurveEditor(stage, {
-    onChange: updateCustomCurve,
+    onChange: (side, curve) => {
+      const lane = state?.editor?.customizing;
+      if (lane) updateCustomCurve(lane, side, curve);
+    },
     onGestureStart: beginGesture,
     onGestureEnd: () => {
       endGesture();
@@ -170,7 +200,9 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
     deckIn.root,
     h('div', { class: 'editor-controls' }, bars),
     presets,
-    volumeLane,
+    rows.volume.el,
+    rows.eq.el,
+    rows.filter.el,
     issues,
   );
   dialog.setAttribute('aria-labelledby', 'editor-title');
@@ -205,8 +237,6 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   redoBtn.addEventListener('click', redo);
   prevBtn.addEventListener('click', () => state?.editor && requestPair(state.editor.pairIndex - 1));
   nextBtn.addEventListener('click', () => state?.editor && requestPair(state.editor.pairIndex + 1));
-  customizeBtn.addEventListener('click', toggleCustomize);
-  resetCurveBtn.addEventListener('click', resetCurve);
   keepBtn.addEventListener('click', () => {
     confirm.hidden = true;
     closeBtn.focus();
@@ -255,7 +285,6 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   });
 
   bars.addEventListener('change', () => updateDraft({ bars: Number(bars.value) as BarsOption }));
-  volume.addEventListener('change', () => setVolumeStyle(volume.value as VolumeStyle));
   playBtn.addEventListener('click', () => (state?.playback === 'previewing' ? handlers.onStop() : handlers.onPreview()));
   for (const deck of [deckOut, deckIn]) {
     deck.bpm.addEventListener('click', () => {
@@ -325,12 +354,19 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         b.setAttribute('aria-pressed', String(active));
       }
       bars.value = String(t.bars);
-      volume.value = t.customVolume ? 'custom' : t.volume;
-      customOption.hidden = !t.customVolume;
-      customizeBtn.textContent = editor.customizing ? 'Listo' : 'Personalizar';
-      customizeBtn.setAttribute('aria-pressed', String(editor.customizing));
-      resetCurveBtn.hidden = !editor.customizing;
-      resetCurveBtn.disabled = !t.customVolume;
+      const styles: Record<EditLane, string> = { volume: t.volume, eq: t.eq, filter: t.filter };
+      const customs: Record<EditLane, unknown> = { volume: t.customVolume, eq: t.customEq, filter: t.customFilter };
+      for (const lane of EDIT_LANES) {
+        const row = rows[lane];
+        const custom = customs[lane] !== null;
+        const editing = editor.customizing === lane;
+        row.select.value = custom ? 'custom' : styles[lane];
+        row.customOption.hidden = !custom;
+        row.customizeBtn.textContent = editing ? 'Listo' : 'Personalizar';
+        row.customizeBtn.setAttribute('aria-pressed', String(editing));
+        row.resetBtn.hidden = !editing;
+        row.resetBtn.disabled = !custom;
+      }
 
       const previewing = next.playback === 'previewing';
       if (!previewing) stage.setPlayhead(null);
@@ -353,7 +389,7 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
       } else {
         const d = barsToSeconds(t.bars, from.bpm!);
         const r = playbackRateFor(from.bpm!, to.bpm!);
-        const gains = volumeSamples(t);
+        const lines = laneLines(t);
         fillDeck(deckOut, from, `Sale en ${formatTime(t.outStart)}`);
         fillDeck(deckIn, to, `Entra en ${formatTime(t.inStart)}, a ${r.toFixed(3)}× durante la transición`);
         stageEmpty.hidden = true;
@@ -361,12 +397,18 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         overview.hidden = false;
         const stageFrom = { name: from.name, peaks: from.peaks!, duration: from.duration, bpm: from.bpm!, firstBeatOffset: from.firstBeatOffset };
         const stageTo = { name: to.name, peaks: to.peaks!, duration: to.duration, bpm: to.bpm!, firstBeatOffset: to.firstBeatOffset };
-        stage.draw({ from: stageFrom, to: stageTo, outStart: t.outStart, inStart: t.inStart, d, r, gainOut: gains.out, gainIn: gains.in });
+        stage.draw({ from: stageFrom, to: stageTo, outStart: t.outStart, inStart: t.inStart, d, r, linesOut: lines.out, linesIn: lines.in });
         miniOut.draw({ ...stageFrom, windowStart: t.outStart, windowLength: d });
         miniIn.draw({ ...stageTo, windowStart: t.inStart, windowLength: d * r });
         stage.setCustomizing(editor.customizing);
-        overview.classList.toggle('is-locked', editor.customizing);
-        curveEditor.update({ curves: editableCurves(t), bars: t.bars, d }, editor.customizing);
+        overview.classList.toggle('is-locked', editor.customizing !== null);
+        const lane = editor.customizing ?? 'volume';
+        const shape = filterShape(t.filter);
+        const scales = {
+          out: laneScale(lane, shape.out?.kind ?? null),
+          in: laneScale(lane, shape.in?.kind ?? null),
+        };
+        curveEditor.update({ lane, curves: editableCurves(t, lane), scales, bars: t.bars, d }, editor.customizing !== null);
       }
 
       // autoplay on open / pair change; restart the loop when the draft (or the tracks' tempo) changes

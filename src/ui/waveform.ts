@@ -1,3 +1,5 @@
+import type { EditLane } from '../types';
+import type { LaneLine } from '../lib/lanes';
 import { incomingAudioAt } from '../lib/timeline';
 import { barsToSeconds, beatSeconds, BEATS_PER_BAR, snapToBeat } from '../lib/timing';
 import { formatTime, h } from './dom';
@@ -19,8 +21,9 @@ export interface StageModel {
   d: number;
   /** Playback rate of the incoming track during the transition. */
   r: number;
-  gainOut: Float32Array;
-  gainIn: Float32Array;
+  /** Lane lines over each song, back to front. */
+  linesOut: LaneLine[];
+  linesIn: LaneLine[];
 }
 
 export interface Stage {
@@ -29,8 +32,11 @@ export interface Stage {
   /** Mix time of the playhead (0 = transition start), or null to hide it. */
   setPlayhead(tau: number | null): void;
   isDragging(): boolean;
-  /** Personalizar mode: waves stop sliding, nudge hides and the waves are dimmed inside the window. */
-  setCustomizing(on: boolean): void;
+  /**
+   * Personalizar mode on a lane (null = off): waves stop sliding, nudge hides, the waves are dimmed
+   * inside the window and the edited lane is drawn on top of the others, which are dimmed.
+   */
+  setCustomizing(lane: EditLane | null): void;
   /** Pixel layout of the window and lanes, relative to `el`; null until something is drawn. */
   geometry(): StageGeometry | null;
   /** Called after every redraw (model change or resize) so overlays can follow the layout. */
@@ -43,7 +49,7 @@ export interface StageGeometry {
   x1: number;
   /** Top and height of the outgoing (`out`) and incoming (`in`) lanes. */
   lanes: Record<'out' | 'in', { top: number; height: number }>;
-  /** Vertical padding inside a lane: gain 1 sits at top + pad, gain 0 at top + height − pad. */
+  /** Vertical padding inside a lane: its full height spans top + pad to top + height − pad. */
   pad: number;
 }
 
@@ -70,7 +76,7 @@ interface Tokens {
   waveDim: string;
   surfaceRaised: string;
   windowFrame: string;
-  gainCurve: string;
+  lanes: Record<EditLane, string>;
   playhead: string;
   beatLine: string;
 }
@@ -82,6 +88,9 @@ const BAR_WIDTH = 2;
 const BAR_GAP = 1;
 const LANE_PAD = 8;
 const RADIUS = 10;
+/** Opacity of the lanes not being edited in Personalizar, and of the EQ's mid and high bands. */
+const DIMMED_ALPHA = 0.35;
+const FAINT_ALPHA = 0.4;
 
 let tokens: Tokens | null = null;
 
@@ -93,7 +102,7 @@ function readTokens(): Tokens {
     waveDim: v('--wave-dim'),
     surfaceRaised: v('--surface-raised'),
     windowFrame: v('--window-frame'),
-    gainCurve: v('--gain-curve'),
+    lanes: { volume: v('--lane-volume'), eq: v('--lane-eq'), filter: v('--lane-filter') },
     playhead: v('--playhead'),
     beatLine: v('--beat-line'),
   };
@@ -217,7 +226,7 @@ export function createStage(
   const canvas = h('canvas', { class: 'stage-canvas', 'aria-hidden': 'true' });
   let model: StageModel | null = null;
   let playhead: number | null = null;
-  let customizing = false;
+  let customizing: EditLane | null = null;
   let layout: StageGeometry | null = null;
   const layoutListeners: (() => void)[] = [];
 
@@ -292,8 +301,8 @@ export function createStage(
     const laneH = Math.round(hh * 0.4);
     layout = { x0, x1, lanes: { out: { top: 0, height: laneH }, in: { top: hh - laneH, height: laneH } }, pad: LANE_PAD };
     const lanes = [
-      { top: 0, track: m.from, audioAt: (tau: number) => m.outStart + tau, gain: m.gainOut },
-      { top: hh - laneH, track: m.to, audioAt: (tau: number) => incomingAudioAt(tau, m.inStart, m.d, m.r), gain: m.gainIn },
+      { top: 0, track: m.from, audioAt: (tau: number) => m.outStart + tau, lines: m.linesOut },
+      { top: hh - laneH, track: m.to, audioAt: (tau: number) => incomingAudioAt(tau, m.inStart, m.d, m.r), lines: m.linesIn },
     ];
 
     // one raised panel behind both lanes, like the reference
@@ -321,7 +330,7 @@ export function createStage(
         const barH = Math.max(1, peakAt(lane.track, audio) * amp);
         const inside = tau >= 0 && tau <= m.d;
         g.fillStyle = inside ? tk.wave : tk.waveDim;
-        g.globalAlpha = inside && customizing ? 0.6 : 1;
+        g.globalAlpha = inside && customizing !== null ? 0.6 : 1;
         g.fillRect(x, mid - barH, BAR_WIDTH, barH * 2);
       }
       g.globalAlpha = 1;
@@ -332,17 +341,27 @@ export function createStage(
       g.roundRect(x0 + 1, lane.top + 1, x1 - x0 - 2, laneH - 2, RADIUS);
       g.stroke();
 
-      g.strokeStyle = tk.gainCurve;
+      // The lane being edited goes on top; the others are dimmed.
+      const ordered = customizing ? [...lane.lines.filter((l) => l.lane !== customizing), ...lane.lines.filter((l) => l.lane === customizing)] : lane.lines;
       g.lineJoin = 'round';
-      g.beginPath();
-      const n = lane.gain.length;
-      for (let k = 0; k < n; k++) {
-        const x = x0 + ((x1 - x0) * k) / (n - 1);
-        const y = lane.top + LANE_PAD + (1 - lane.gain[k]) * (laneH - LANE_PAD * 2);
-        if (k === 0) g.moveTo(x, y);
-        else g.lineTo(x, y);
+      for (const line of ordered) {
+        const dimmed = customizing !== null && line.lane !== customizing;
+        g.strokeStyle = tk.lanes[line.lane];
+        g.lineWidth = line.faint ? 1 : 2;
+        g.globalAlpha = (line.faint ? FAINT_ALPHA : 1) * (dimmed ? DIMMED_ALPHA : 1);
+        g.beginPath();
+        const n = line.values.length;
+        const { zero, one } = line.scale;
+        for (let k = 0; k < n; k++) {
+          const x = x0 + ((x1 - x0) * k) / (n - 1);
+          const height = zero + Math.min(1, Math.max(0, line.values[k])) * (one - zero);
+          const y = lane.top + LANE_PAD + (1 - height) * (laneH - LANE_PAD * 2);
+          if (k === 0) g.moveTo(x, y);
+          else g.lineTo(x, y);
+        }
+        g.stroke();
       }
-      g.stroke();
+      g.globalAlpha = 1;
     }
 
     if (playhead !== null) {
@@ -373,9 +392,10 @@ export function createStage(
       render(false);
     },
     isDragging: () => out.isDragging() || inn.isDragging(),
-    setCustomizing(on) {
-      if (on === customizing) return;
-      customizing = on;
+    setCustomizing(lane) {
+      if (lane === customizing) return;
+      const on = lane !== null;
+      customizing = lane;
       el.classList.toggle('is-customizing', on);
       for (const lane of [out.el, inn.el]) lane.tabIndex = on ? -1 : 0;
       for (const b of el.querySelectorAll<HTMLButtonElement>('.nudge')) b.tabIndex = on ? -1 : 0;

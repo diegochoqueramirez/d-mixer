@@ -1,6 +1,7 @@
-import type { AppState, EditorState, GainCurve, Track, Transition, TransitionPreset, VolumeStyle } from './types';
+import type { AppState, EditLane, EditorState, EqStyle, FilterStyle, GainCurve, SideCurves, Track, Transition, TransitionPreset, VolumeStyle } from './types';
 import { PRESETS } from './lib/curves';
 import { curveFromStyle } from './lib/gainCurve';
+import { bassCurves, filterCurves } from './lib/lanes';
 import { barsToSeconds, snapToBeat } from './lib/timing';
 import { validateQueue, type Pair, type PairValidation } from './lib/validation';
 
@@ -65,7 +66,7 @@ export function derive(s: AppState): Derived {
   return { tracks, pairs, validations: validateQueue(pairs, names) };
 }
 
-/** The "Auto" transition: Fade over 8 bars, starting 16 bars of A before its end. */
+/** The "Auto" transition: the full Fade recipe over 8 bars, starting 16 bars of A before its end. */
 export function defaultTransition(from: Track, to: Track): Transition {
   const bpm = from.bpm ?? 120;
   const outStart = snapToBeat(Math.max(0, from.duration - barsToSeconds(16, bpm)), bpm, from.firstBeatOffset);
@@ -79,6 +80,10 @@ export function defaultTransition(from: Track, to: Track): Transition {
     preset: 'fade',
     auto: true,
     customVolume: null,
+    eq: PRESETS.fade.eq,
+    filter: PRESETS.fade.filter,
+    customEq: null,
+    customFilter: null,
   };
 }
 
@@ -94,7 +99,11 @@ function sameTransition(a: Transition, b: Transition): boolean {
     a.volume === b.volume &&
     a.preset === b.preset &&
     a.auto === b.auto &&
-    JSON.stringify(a.customVolume) === JSON.stringify(b.customVolume)
+    a.eq === b.eq &&
+    a.filter === b.filter &&
+    JSON.stringify(a.customVolume) === JSON.stringify(b.customVolume) &&
+    JSON.stringify(a.customEq) === JSON.stringify(b.customEq) &&
+    JSON.stringify(a.customFilter) === JSON.stringify(b.customFilter)
   );
 }
 
@@ -149,7 +158,7 @@ export function endGesture(): void {
   gesture = { open: false, recorded: false };
 }
 
-function freshEditor(pairIndex: number, saved: Transition, customizing: boolean): EditorState {
+function freshEditor(pairIndex: number, saved: Transition, customizing: EditLane | null): EditorState {
   return { pairIndex, draft: { ...saved }, dirty: false, customizing, past: [], future: [] };
 }
 
@@ -163,7 +172,7 @@ function savedFor(s: AppState, pairIndex: number): Transition | undefined {
 export function openEditor(pairIndex: number): void {
   setState((s) => {
     const saved = savedFor(s, pairIndex);
-    return saved ? { editor: freshEditor(pairIndex, saved, false) } : {};
+    return saved ? { editor: freshEditor(pairIndex, saved, null) } : {};
   });
 }
 
@@ -184,17 +193,26 @@ function editDraft(change: (draft: Transition) => Partial<Transition>): void {
   setState((s) => (s.editor ? commitDraft(s, { ...s.editor.draft, ...change(s.editor.draft) }) : {}));
 }
 
-/** Moving points or bars leaves Auto but keeps the preset name if the volume still matches. */
+/** Moving points or bars leaves Auto but keeps the preset name if the three lanes still match. */
 export function updateDraft(patch: Partial<Pick<Transition, 'outStart' | 'inStart' | 'bars'>>): void {
   editDraft(() => ({ ...patch, auto: false }));
 }
 
 export function applyPreset(preset: TransitionPreset): void {
-  editDraft(() => ({ preset, volume: PRESETS[preset].volume, customVolume: null, auto: false }));
+  const { volume, eq, filter } = PRESETS[preset];
+  editDraft(() => ({ preset, volume, eq, filter, customVolume: null, customEq: null, customFilter: null, auto: false }));
 }
 
 export function setVolumeStyle(volume: VolumeStyle): void {
   editDraft(() => ({ volume, customVolume: null, auto: false }));
+}
+
+export function setEqStyle(eq: EqStyle): void {
+  editDraft(() => ({ eq, customEq: null, auto: false }));
+}
+
+export function setFilterStyle(filter: FilterStyle): void {
+  editDraft(() => ({ filter, customFilter: null, auto: false }));
 }
 
 export function resetToAuto(): void {
@@ -207,22 +225,35 @@ export function resetToAuto(): void {
   });
 }
 
-/** Curves being edited: the hand-drawn ones, or the ones that reproduce the current style. */
-export function editableCurves(t: Transition) {
+function curvesOfVolume(t: Transition) {
   return t.customVolume ?? curveFromStyle(t.volume);
 }
 
-export function updateCustomCurve(lane: 'out' | 'in', curve: GainCurve): void {
-  editDraft((d) => ({ customVolume: { ...editableCurves(d), [lane]: curve }, auto: false }));
+/** Curves of a lane being edited: the hand-drawn ones, or the ones that reproduce its style. */
+export function editableCurves(t: Transition, lane: EditLane): SideCurves {
+  if (lane === 'eq') return bassCurves(t);
+  if (lane === 'filter') return filterCurves(t);
+  return curvesOfVolume(t);
 }
 
-/** Back to the curve of the current volume style. */
-export function resetCurve(): void {
-  editDraft(() => ({ customVolume: null }));
+export function updateCustomCurve(lane: EditLane, side: 'out' | 'in', curve: GainCurve): void {
+  editDraft((d) => {
+    if (lane === 'eq') return { customEq: { ...bassCurves(d), [side]: curve }, auto: false };
+    if (lane === 'filter') return { customFilter: { ...filterCurves(d), [side]: curve }, auto: false };
+    return { customVolume: { ...curvesOfVolume(d), [side]: curve }, auto: false };
+  });
 }
 
-export function toggleCustomize(): void {
-  setState((s) => (s.editor ? { editor: { ...s.editor, customizing: !s.editor.customizing } } : {}));
+const CUSTOM_FIELD = { volume: 'customVolume', eq: 'customEq', filter: 'customFilter' } as const;
+
+/** Back to the curve of the lane's current style. */
+export function resetCurve(lane: EditLane): void {
+  editDraft(() => ({ [CUSTOM_FIELD[lane]]: null }));
+}
+
+/** Starts editing a lane, switches to it from another lane, or leaves Personalizar when it is the current one. */
+export function toggleCustomize(lane: EditLane): void {
+  setState((s) => (s.editor ? { editor: { ...s.editor, customizing: s.editor.customizing === lane ? null : lane } } : {}));
 }
 
 export function undo(): void {

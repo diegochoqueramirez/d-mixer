@@ -108,6 +108,46 @@ describe('buildTimeline with a custom curve', () => {
   });
 });
 
+describe('buildTimeline with EQ and filter', () => {
+  const tracks = [track('a', { bpm: 120 }), track('b', { bpm: 120 })];
+  const build = (overrides: Parameters<typeof transition>[2]) => buildTimeline(tracks, { 'a->b': transition('a', 'b', overrides) }, 0, 0);
+
+  it('Center bass swap schedules the bands of both songs over the window', () => {
+    const [a, b] = build({ eq: 'center-bass-swap' });
+    expect(a.eqOut).toMatchObject({ time: 200, duration: 8 });
+    expect(b.eqIn).toMatchObject({ time: 200, duration: 8 });
+    expect(a.eqOut!.low.at(-1)).toBeCloseTo(0);
+    expect(b.eqIn!.low.at(-1)).toBeCloseTo(1);
+  });
+
+  it('Low pass filter out only filters the outgoing song, in Hz', () => {
+    const [a, b] = build({ filter: 'lpf-out' });
+    expect(a.filterOut?.kind).toBe('lowpass');
+    expect(a.filterOut!.frequency[0]).toBeCloseTo(20000);
+    expect(a.filterOut!.frequency.at(-1)!).toBeLessThan(500);
+    expect(a.filterOut!.wet[0]).toBe(0);
+    expect(a.filterOut!.wet.at(-1)).toBe(1);
+    expect(b.filterIn).toBeUndefined();
+    expect(a.noiseOut).toBeUndefined();
+  });
+
+  it('Noise out end schedules noise over the outgoing song and no filter', () => {
+    const [a, b] = build({ filter: 'noise-out-end' });
+    expect(a.noiseOut).toMatchObject({ time: 200, duration: 8 });
+    expect(a.noiseOut!.level[0]).toBe(0);
+    expect(a.noiseOut!.level.at(-1)).toBeCloseTo(0.3);
+    expect(a.noiseOut!.frequency.at(-1)).toBeCloseTo(14000);
+    expect(a.filterOut).toBeUndefined();
+    expect(b.filterIn).toBeUndefined();
+  });
+
+  it('None schedules no EQ, filter or noise', () => {
+    for (const e of build({})) {
+      expect(e.eqIn ?? e.eqOut ?? e.filterIn ?? e.filterOut ?? e.noiseOut).toBeUndefined();
+    }
+  });
+});
+
 describe('buildSequentialTimeline', () => {
   it('plays tracks back to back at rate 1 with no gain curves', () => {
     const entries = buildSequentialTimeline([track('a', { duration: 100 }), track('b', { duration: 50 }), track('c')]);

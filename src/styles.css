@@ -7,8 +7,11 @@
   --text-muted: #a7a7a7;
   --wave: #d98a3d;
   --wave-dim: #6b4a2b;
-  --window-frame: #4a90e2;
-  --gain-curve: #f2c94c;
+  --window-frame: rgba(255, 255, 255, 0.4);
+  /* lane lines (palette from vimj): volume, EQ and filter */
+  --lane-volume: #46aaff;
+  --lane-eq: #ffd232;
+  --lane-filter: #f57de1;
   --playhead: #1ed760;
   --beat-line: rgba(255, 255, 255, 0.08);
   --danger: #f15e6c;
@@ -498,6 +501,11 @@ button:disabled {
   overflow-y: auto;
 }
 
+/* The body scrolls; its blocks keep their height instead of shrinking to fit. */
+.editor-body > * {
+  flex-shrink: 0;
+}
+
 .overview {
   display: grid;
   gap: 4px;
@@ -736,10 +744,17 @@ button:disabled {
 }
 
 .lane-actions {
+  min-width: 0;
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 8px;
+}
+
+.lane-actions .pill-select {
+  max-width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
 }
 
 .customize-btn {
@@ -771,9 +786,18 @@ button:disabled {
 }
 
 .curve-editor {
+  --lane-color: var(--lane-volume);
   position: absolute;
   inset: 0;
   pointer-events: none;
+}
+
+.curve-editor[data-lane="eq"] {
+  --lane-color: var(--lane-eq);
+}
+
+.curve-editor[data-lane="filter"] {
+  --lane-color: var(--lane-filter);
 }
 
 .curve-area {
@@ -811,7 +835,7 @@ button:disabled {
   height: 12px;
   border: 2px solid var(--surface);
   border-radius: 50%;
-  background: var(--gain-curve);
+  background: var(--lane-color);
   box-sizing: content-box;
 }
 
@@ -823,12 +847,12 @@ button:disabled {
   content: "";
   width: 8px;
   height: 8px;
-  border: 2px solid var(--gain-curve);
+  border: 2px solid var(--lane-color);
   background: var(--surface);
 }
 
 .curve-handle.is-eased::before {
-  background: var(--gain-curve);
+  background: var(--lane-color);
 }
 
 .curve-point:hover::before,

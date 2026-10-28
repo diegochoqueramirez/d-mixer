@@ -1,4 +1,4 @@
-import type { Transition, TransitionPreset, VolumeStyle } from '../types';
+import type { EqStyle, FilterStyle, Transition, TransitionPreset, VolumeStyle } from '../types';
 import { sampleGainCurve } from './gainCurve';
 
 export const CURVE_SAMPLES = 256;
@@ -19,11 +19,21 @@ export const VOLUME_LABELS: Record<VolumeStyle, string> = {
   'fade-in-fast-out': 'Fade in fast out',
 };
 
-export const PRESETS: Record<TransitionPreset, { label: string; volume: VolumeStyle }> = {
-  fade: { label: 'Fade', volume: 'smooth-crossfade' },
-  blend: { label: 'Blend', volume: 'crossfade' },
-  rise: { label: 'Rise', volume: 'overlap' },
-  slam: { label: 'Slam', volume: 'center-cut' },
+export interface PresetRecipe {
+  label: string;
+  volume: VolumeStyle;
+  eq: EqStyle;
+  filter: FilterStyle;
+}
+
+/** Full recipe of each preset (from vimj, see SPEC 04). */
+export const PRESETS: Record<TransitionPreset, PresetRecipe> = {
+  fade: { label: 'Fade', volume: 'smooth-crossfade', eq: 'center-bass-swap', filter: 'none' },
+  blend: { label: 'Blend', volume: 'overlap', eq: 'three-band-fade', filter: 'none' },
+  rise: { label: 'Rise', volume: 'overlap', eq: 'end-bass-swap', filter: 'lpf-in-hpf-out' },
+  wave: { label: 'Wave', volume: 'overlap', eq: 'center-bass-swap', filter: 'lpf-in' },
+  melt: { label: 'Melt', volume: 'crossfade', eq: 'center-bass-swap', filter: 'hpf-in' },
+  slam: { label: 'Slam', volume: 'center-cut', eq: 'none', filter: 'none' },
 };
 
 /** Holds 1 until the end of the window, then drops to 0. */
@@ -74,10 +84,12 @@ export function volumeSamples(t: Pick<Transition, 'volume' | 'customVolume'>, n 
   return sampleCurve(t.volume, n);
 }
 
-/** Text of the transition chip: "Auto", the preset name, or "Custom". */
-export function chipLabel(t: Pick<Transition, 'auto' | 'preset' | 'volume' | 'customVolume'>): string {
+type ChipFields = Pick<Transition, 'auto' | 'preset' | 'volume' | 'eq' | 'filter' | 'customVolume' | 'customEq' | 'customFilter'>;
+
+/** Text of the transition chip: "Auto", the preset name when all three lanes follow its recipe, or "Custom". */
+export function chipLabel(t: ChipFields): string {
   if (t.auto) return 'Auto';
-  if (t.customVolume) return 'Custom';
-  if (t.preset !== null && PRESETS[t.preset].volume === t.volume) return PRESETS[t.preset].label;
-  return 'Custom';
+  if (t.customVolume || t.customEq || t.customFilter || t.preset === null) return 'Custom';
+  const p = PRESETS[t.preset];
+  return p.volume === t.volume && p.eq === t.eq && p.filter === t.filter ? p.label : 'Custom';
 }

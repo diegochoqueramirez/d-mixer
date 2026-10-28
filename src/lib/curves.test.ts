@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { VOLUME_STYLES } from '../types';
+import { PRESET_ORDER, VOLUME_STYLES } from '../types';
 import { CURVE_SAMPLES, chipLabel, curveGain, PRESETS, sampleCurve, volumeSamples } from './curves';
 import { curveFromStyle } from './gainCurve';
 
@@ -79,22 +79,43 @@ describe('sampleCurve', () => {
 });
 
 describe('chipLabel', () => {
+  const recipe = (p: keyof typeof PRESETS) => ({ volume: PRESETS[p].volume, eq: PRESETS[p].eq, filter: PRESETS[p].filter });
+  const base = { auto: false, preset: null, customVolume: null, customEq: null, customFilter: null, ...recipe('fade') };
+
   it('says Auto while the transition is automatic', () => {
-    expect(chipLabel({ auto: true, preset: 'fade', volume: 'smooth-crossfade', customVolume: null })).toBe('Auto');
+    expect(chipLabel({ ...base, auto: true, preset: 'fade' })).toBe('Auto');
   });
 
-  it('names the preset when the volume matches it', () => {
-    expect(chipLabel({ auto: false, preset: 'slam', volume: PRESETS.slam.volume, customVolume: null })).toBe('Slam');
+  it('names the preset when the three lanes follow its recipe', () => {
+    for (const p of PRESET_ORDER) expect(chipLabel({ ...base, preset: p, ...recipe(p) })).toBe(PRESETS[p].label);
   });
 
-  it('says Custom when the volume was changed by hand or no preset was picked', () => {
-    expect(chipLabel({ auto: false, preset: 'fade', volume: 'overlap', customVolume: null })).toBe('Custom');
-    expect(chipLabel({ auto: false, preset: null, volume: 'crossfade', customVolume: null })).toBe('Custom');
+  it('says Custom when one lane was changed by hand or no preset was picked', () => {
+    expect(chipLabel({ ...base, preset: 'fade', volume: 'overlap' })).toBe('Custom');
+    expect(chipLabel({ ...base, preset: 'fade', eq: 'none' })).toBe('Custom');
+    expect(chipLabel({ ...base, preset: 'wave', ...recipe('wave'), filter: 'hpf-in' })).toBe('Custom');
+    expect(chipLabel({ ...base, preset: null })).toBe('Custom');
   });
 
-  it('says Custom when the curve was drawn by hand, even if the style matches a preset', () => {
-    const customVolume = curveFromStyle('smooth-crossfade');
-    expect(chipLabel({ auto: false, preset: 'fade', volume: 'smooth-crossfade', customVolume })).toBe('Custom');
+  it('says Custom when a curve was drawn by hand, even if the styles match a preset', () => {
+    const curves = curveFromStyle('smooth-crossfade');
+    expect(chipLabel({ ...base, preset: 'fade', customVolume: curves })).toBe('Custom');
+    expect(chipLabel({ ...base, preset: 'fade', customEq: curves })).toBe('Custom');
+    expect(chipLabel({ ...base, preset: 'fade', customFilter: curves })).toBe('Custom');
+  });
+});
+
+describe('PRESETS', () => {
+  it('follow the recipes of SPEC 04', () => {
+    expect(PRESETS).toMatchObject({
+      fade: { volume: 'smooth-crossfade', eq: 'center-bass-swap', filter: 'none' },
+      blend: { volume: 'overlap', eq: 'three-band-fade', filter: 'none' },
+      rise: { volume: 'overlap', eq: 'end-bass-swap', filter: 'lpf-in-hpf-out' },
+      wave: { volume: 'overlap', eq: 'center-bass-swap', filter: 'lpf-in' },
+      melt: { volume: 'crossfade', eq: 'center-bass-swap', filter: 'hpf-in' },
+      slam: { volume: 'center-cut', eq: 'none', filter: 'none' },
+    });
+    expect(PRESET_ORDER).toEqual(['fade', 'blend', 'rise', 'wave', 'melt', 'slam']);
   });
 });
 

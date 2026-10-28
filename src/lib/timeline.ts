@@ -1,9 +1,25 @@
-import type { TimelineEntry, Track, Transition } from '../types';
+import type { EqEvent, FilterEvent, NoiseEvent, TimelineEntry, Track, Transition } from '../types';
 import { volumeSamples } from './curves';
+import { eqSamples, filterSamples, filterWet, highpassHz, lowpassHz, NOISE_LEVEL, noiseHz, type EqSide, type FilterSamples } from './lanes';
 import { barsToSeconds, playbackRateFor, rampAudioSeconds } from './timing';
 
 /** Bars of context played before and after the window in the editor preview. */
 export const PREVIEW_LEAD_BARS = 2;
+
+function eqEvent(side: EqSide | null, time: number, duration: number): EqEvent | undefined {
+  return side ? { time, duration, ...side } : undefined;
+}
+
+function filterEvent(side: FilterSamples | null, time: number, duration: number): FilterEvent | undefined {
+  if (!side || side.kind === 'noise') return undefined;
+  const toHz = side.kind === 'lowpass' ? lowpassHz : highpassHz;
+  return { time, duration, kind: side.kind, frequency: side.closure.map(toHz), wet: side.closure.map(filterWet) };
+}
+
+function noiseEvent(side: FilterSamples | null, time: number, duration: number): NoiseEvent | undefined {
+  if (side?.kind !== 'noise') return undefined;
+  return { time, duration, level: side.closure.map((a) => NOISE_LEVEL * a), frequency: side.closure.map(noiseHz) };
+}
 
 /** A known (context time, audio position) from which the track plays at rate 1. */
 interface RateOneAnchor {
@@ -48,8 +64,13 @@ export function buildTimeline(
     const d = barsToSeconds(transition.bars, from.bpm);
     const r = playbackRateFor(from.bpm, to.bpm);
     const curve = volumeSamples(transition);
+    const eq = eqSamples(transition);
+    const filter = filterSamples(transition);
 
     current.gainCurveOut = { time: tOut, duration: d, curve: curve.out };
+    current.eqOut = eqEvent(eq.out, tOut, d);
+    current.filterOut = filterEvent(filter.out, tOut, d);
+    current.noiseOut = noiseEvent(filter.out, tOut, d);
     current.stopAt = tOut + d;
 
     anchor = { time: tOut + 2 * d, audio: transition.inStart + d * r + rampAudioSeconds(d, r) };
@@ -63,6 +84,8 @@ export function buildTimeline(
         { time: tOut + 2 * d, rate: 1, ramp: true },
       ],
       gainCurveIn: { time: tOut, duration: d, curve: curve.in },
+      eqIn: eqEvent(eq.in, tOut, d),
+      filterIn: filterEvent(filter.in, tOut, d),
       stopAt: Math.max(tOut + d, anchor.time + (to.duration - anchor.audio)),
     };
     entries.push(current);
