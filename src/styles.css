@@ -12,6 +12,8 @@
   --lane-volume: #46aaff;
   --lane-eq: #ffd232;
   --lane-filter: #f57de1;
+  --lane-effect: #f0f0f0;
+  --lane-loop: #ff913c;
   --playhead: #1ed760;
   --beat-line: rgba(255, 255, 255, 0.08);
   --danger: #f15e6c;
@@ -703,11 +705,9 @@ button:disabled {
 
 .presets {
   display: flex;
+  flex-wrap: wrap;
   gap: 8px;
-  margin: 0 -16px;
-  padding: 2px 16px;
-  overflow-x: auto;
-  scrollbar-width: none;
+  padding: 2px 0;
 }
 
 .preset {
@@ -798,6 +798,10 @@ button:disabled {
 
 .curve-editor[data-lane="filter"] {
   --lane-color: var(--lane-filter);
+}
+
+.curve-editor[data-lane="effect"] {
+  --lane-color: var(--lane-effect);
 }
 
 .curve-area {

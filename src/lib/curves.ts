@@ -1,4 +1,4 @@
-import type { EqStyle, FilterStyle, Transition, TransitionPreset, VolumeStyle } from '../types';
+import type { EffectStyle, EqStyle, FilterStyle, LoopStyle, Transition, TransitionPreset, VolumeStyle } from '../types';
 import { sampleGainCurve } from './gainCurve';
 
 export const CURVE_SAMPLES = 256;
@@ -24,16 +24,23 @@ export interface PresetRecipe {
   volume: VolumeStyle;
   eq: EqStyle;
   filter: FilterStyle;
+  effect: EffectStyle;
+  looping: LoopStyle;
 }
 
-/** Full recipe of each preset (from vimj, see SPEC 04). */
+const plain = { effect: 'none', looping: 'none' } as const;
+
+/** Full recipe of each preset (from vimj, see SPEC 04 and SPEC 05). */
 export const PRESETS: Record<TransitionPreset, PresetRecipe> = {
-  fade: { label: 'Fade', volume: 'smooth-crossfade', eq: 'center-bass-swap', filter: 'none' },
-  blend: { label: 'Blend', volume: 'overlap', eq: 'three-band-fade', filter: 'none' },
-  rise: { label: 'Rise', volume: 'overlap', eq: 'end-bass-swap', filter: 'lpf-in-hpf-out' },
-  wave: { label: 'Wave', volume: 'overlap', eq: 'center-bass-swap', filter: 'lpf-in' },
-  melt: { label: 'Melt', volume: 'crossfade', eq: 'center-bass-swap', filter: 'hpf-in' },
-  slam: { label: 'Slam', volume: 'center-cut', eq: 'none', filter: 'none' },
+  fade: { label: 'Fade', volume: 'smooth-crossfade', eq: 'center-bass-swap', filter: 'none', ...plain },
+  blend: { label: 'Blend', volume: 'overlap', eq: 'three-band-fade', filter: 'none', ...plain },
+  rise: { label: 'Rise', volume: 'overlap', eq: 'end-bass-swap', filter: 'lpf-in-hpf-out', ...plain },
+  wave: { label: 'Wave', volume: 'overlap', eq: 'center-bass-swap', filter: 'lpf-in', ...plain },
+  melt: { label: 'Melt', volume: 'crossfade', eq: 'center-bass-swap', filter: 'hpf-in', ...plain },
+  slam: { label: 'Slam', volume: 'center-cut', eq: 'none', filter: 'none', ...plain },
+  dissolve: { label: 'Dissolve', volume: 'crossfade', eq: 'center-bass-swap', filter: 'lpf-out', effect: 'reverb-out-end', looping: 'none' },
+  surge: { label: 'Surge', volume: 'fade-in-cut-out', eq: 'end-bass-swap', filter: 'noise-out-end', effect: 'none', looping: 'loop-4' },
+  afterglow: { label: 'Afterglow', volume: 'smooth-crossfade', eq: 'center-bass-swap', filter: 'hpf-out', effect: 'echo-three-quarter-out-end', looping: 'none' },
 };
 
 /** Holds 1 until the end of the window, then drops to 0. */
@@ -84,12 +91,16 @@ export function volumeSamples(t: Pick<Transition, 'volume' | 'customVolume'>, n 
   return sampleCurve(t.volume, n);
 }
 
-type ChipFields = Pick<Transition, 'auto' | 'preset' | 'volume' | 'eq' | 'filter' | 'customVolume' | 'customEq' | 'customFilter'>;
+type ChipFields = Pick<
+  Transition,
+  'auto' | 'preset' | 'volume' | 'eq' | 'filter' | 'effect' | 'looping' | 'customVolume' | 'customEq' | 'customFilter' | 'customEffect'
+>;
 
-/** Text of the transition chip: "Auto", the preset name when all three lanes follow its recipe, or "Custom". */
+/** Text of the transition chip: "Auto", the preset name when all five fields follow its recipe, or "Custom". */
 export function chipLabel(t: ChipFields): string {
   if (t.auto) return 'Auto';
-  if (t.customVolume || t.customEq || t.customFilter || t.preset === null) return 'Custom';
+  if (t.customVolume || t.customEq || t.customFilter || t.customEffect || t.preset === null) return 'Custom';
   const p = PRESETS[t.preset];
-  return p.volume === t.volume && p.eq === t.eq && p.filter === t.filter ? p.label : 'Custom';
+  const follows = p.volume === t.volume && p.eq === t.eq && p.filter === t.filter && p.effect === t.effect && p.looping === t.looping;
+  return follows ? p.label : 'Custom';
 }

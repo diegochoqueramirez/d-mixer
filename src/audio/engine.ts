@@ -1,4 +1,5 @@
-import type { TimelineEntry } from '../types';
+import type { LoopEvent, TimelineEntry } from '../types';
+import { scheduleEffect } from './effectNodes';
 import { laneChain, scheduleNoise } from './laneNodes';
 
 const START_LATENCY = 0.08;
@@ -6,11 +7,13 @@ const START_LATENCY = 0.08;
 const LOOP_FADE = 0.01;
 /** How long before a loop iteration ends the next one gets scheduled. */
 const LOOP_LOOKAHEAD = 0.5;
+/** Crossfade at each jump of a beat loop (vimj). */
+const SEAM = 0.004;
 
 interface Voice {
   source: AudioBufferSourceNode;
   gain: GainNode;
-  /** EQ, filter and noise nodes, plus the noise source; empty when the track plays untouched. */
+  /** EQ, filter, noise and effect nodes, plus the noise and loop sources; empty when the track plays untouched. */
   extra: AudioNode[];
   extraSources: AudioBufferSourceNode[];
 }
@@ -26,6 +29,8 @@ let ctx: AudioContext | null = null;
 let iterations: Iteration[] = [];
 let timer: ReturnType<typeof setTimeout> | undefined;
 let session = 0;
+/** Disconnect effect tails once they have died away. */
+let tailTimers: ReturnType<typeof setTimeout>[] = [];
 
 /** Created lazily so it starts inside a user gesture (file pick, drop or click). */
 export function getAudioContext(): AudioContext {
@@ -33,26 +38,81 @@ export function getAudioContext(): AudioContext {
   return ctx;
 }
 
+/** Gain that fades in at `start` and out at `end` (null = never), each over the loop seam. */
+function seamEnvelope(c: BaseAudioContext, start: number | null, end: number | null): GainNode {
+  const env = c.createGain();
+  if (start !== null) {
+    env.gain.setValueAtTime(0, start);
+    env.gain.linearRampToValueAtTime(1, start + SEAM);
+  }
+  if (end !== null) {
+    env.gain.setValueAtTime(1, end);
+    env.gain.linearRampToValueAtTime(0, end + SEAM);
+  }
+  return env;
+}
+
+/**
+ * Beat loop of the outgoing song: its own source plays until the first jump, then one source per pass
+ * replays the window's start. Every jump crossfades over the seam. Returns the sources and envelopes.
+ */
+function scheduleLoop(c: BaseAudioContext, source: AudioBufferSourceNode, entry: TimelineEntry, loop: LoopEvent, base: number, input: AudioNode) {
+  const sources: AudioBufferSourceNode[] = [];
+  const nodes: AudioNode[] = [];
+  const first = base + loop.jumps[0].time;
+  const mainEnv = seamEnvelope(c, null, first);
+  source.connect(mainEnv).connect(input);
+  nodes.push(mainEnv);
+  source.stop(Math.min(first + SEAM, base + entry.stopAt));
+
+  loop.jumps.forEach((j, i) => {
+    const start = base + j.time;
+    const last = i === loop.jumps.length - 1;
+    const end = start + j.duration;
+    const pass = c.createBufferSource();
+    pass.buffer = source.buffer;
+    const env = seamEnvelope(c, start, last ? null : end);
+    pass.connect(env).connect(input);
+    pass.start(start, loop.audioStart);
+    pass.stop(Math.min(last ? end : end + SEAM, base + entry.stopAt));
+    sources.push(pass);
+    nodes.push(env);
+  });
+  return { sources, nodes };
+}
+
 function schedule(c: AudioContext, entries: TimelineEntry[], buffers: Map<string, AudioBuffer>, base: number, out: AudioNode): Voice[] {
   return entries.map((entry) => {
     const source = c.createBufferSource();
     source.buffer = buffers.get(entry.trackId) ?? null;
     const gain = c.createGain();
-    const lanes = laneChain(c, entry, base);
-    if (lanes) {
-      source.connect(lanes.input);
-      lanes.output.connect(gain);
-    } else {
-      source.connect(gain);
-    }
-    gain.connect(out);
-    const extra = lanes?.nodes ?? [];
+    const extra: AudioNode[] = [];
     const extraSources: AudioBufferSourceNode[] = [];
+    const lanes = laneChain(c, entry, base);
+    // `input` takes every source of the song; `post` is the song after its EQ and filter, before its volume.
+    let input: AudioNode = gain;
+    let post: AudioNode = gain;
+    if (lanes) {
+      input = lanes.input;
+      post = lanes.output;
+      extra.push(...lanes.nodes);
+    } else if (entry.loopOut || entry.effectOut) {
+      input = post = c.createGain();
+      extra.push(input);
+    }
+    if (post !== gain) post.connect(gain);
+    gain.connect(out);
+
     if (entry.noiseOut) {
       // Noise goes after the volume gain, so it does not fade with the outgoing song.
       const noise = scheduleNoise(c, entry.noiseOut, base, out);
       extra.push(...noise.nodes);
       extraSources.push(noise.source);
+    }
+    if (entry.effectOut) {
+      const effect = scheduleEffect(c, entry.effectOut, base, post, out);
+      extra.push(...effect.nodes);
+      tailTimers.push(setTimeout(() => effect.nodes.forEach((n) => n.disconnect()), Math.max(0, (effect.until - c.currentTime) * 1000)));
     }
 
     for (const e of entry.rateEvents) {
@@ -68,7 +128,14 @@ function schedule(c: AudioContext, entries: TimelineEntry[], buffers: Map<string
     }
 
     source.start(base + entry.contextStart, entry.offset);
-    source.stop(base + entry.stopAt);
+    if (entry.loopOut) {
+      const loop = scheduleLoop(c, source, entry, entry.loopOut, base, input);
+      extraSources.push(...loop.sources);
+      extra.push(...loop.nodes);
+    } else {
+      source.connect(input);
+      source.stop(base + entry.stopAt);
+    }
     return { source, gain, extra, extraSources };
   });
 }
@@ -128,6 +195,8 @@ export async function playLoop(timeline: TimelineEntry[], length: number, buffer
 export function stop(): void {
   session++;
   clearTimeout(timer);
+  tailTimers.forEach(clearTimeout);
+  tailTimers = [];
   for (const it of iterations) {
     for (const v of it.voices) {
       for (const source of [v.source, ...v.extraSources]) {

@@ -1,4 +1,5 @@
-import type { EditLane } from '../types';
+import type { EditLane, LoopEvent } from '../types';
+import { loopedAudioAt } from '../lib/effects';
 import type { LaneLine } from '../lib/lanes';
 import { incomingAudioAt } from '../lib/timeline';
 import { barsToSeconds, beatSeconds, BEATS_PER_BAR, snapToBeat } from '../lib/timing';
@@ -24,6 +25,8 @@ export interface StageModel {
   /** Lane lines over each song, back to front. */
   linesOut: LaneLine[];
   linesIn: LaneLine[];
+  /** Beat loop of the outgoing song, jump times in mix time (0 = window start); null = none. */
+  loop: LoopEvent | null;
 }
 
 export interface Stage {
@@ -77,6 +80,7 @@ interface Tokens {
   surfaceRaised: string;
   windowFrame: string;
   lanes: Record<EditLane, string>;
+  loop: string;
   playhead: string;
   beatLine: string;
 }
@@ -91,6 +95,7 @@ const RADIUS = 10;
 /** Opacity of the lanes not being edited in Personalizar, and of the EQ's mid and high bands. */
 const DIMMED_ALPHA = 0.35;
 const FAINT_ALPHA = 0.4;
+const LOOP_MARK_SIZE = 11;
 
 let tokens: Tokens | null = null;
 
@@ -102,7 +107,8 @@ function readTokens(): Tokens {
     waveDim: v('--wave-dim'),
     surfaceRaised: v('--surface-raised'),
     windowFrame: v('--window-frame'),
-    lanes: { volume: v('--lane-volume'), eq: v('--lane-eq'), filter: v('--lane-filter') },
+    lanes: { volume: v('--lane-volume'), eq: v('--lane-eq'), filter: v('--lane-filter'), effect: v('--lane-effect') },
+    loop: v('--lane-loop'),
     playhead: v('--playhead'),
     beatLine: v('--beat-line'),
   };
@@ -300,9 +306,14 @@ export function createStage(
 
     const laneH = Math.round(hh * 0.4);
     layout = { x0, x1, lanes: { out: { top: 0, height: laneH }, in: { top: hh - laneH, height: laneH } }, pad: LANE_PAD };
+    // Inside the window, A plays what its loop sends it to; repeats are drawn dimmed.
+    const outAudioAt = (tau: number) => {
+      if (m.loop && tau >= 0 && tau <= m.d) return loopedAudioAt(m.loop, 0, tau);
+      return { audio: m.outStart + tau, repeat: false };
+    };
     const lanes = [
-      { top: 0, track: m.from, audioAt: (tau: number) => m.outStart + tau, lines: m.linesOut },
-      { top: hh - laneH, track: m.to, audioAt: (tau: number) => incomingAudioAt(tau, m.inStart, m.d, m.r), lines: m.linesIn },
+      { top: 0, track: m.from, audioAt: outAudioAt, lines: m.linesOut, jumps: m.loop?.jumps ?? [] },
+      { top: hh - laneH, track: m.to, audioAt: (tau: number) => ({ audio: incomingAudioAt(tau, m.inStart, m.d, m.r), repeat: false }), lines: m.linesIn, jumps: [] },
     ];
 
     // one raised panel behind both lanes, like the reference
@@ -325,15 +336,28 @@ export function createStage(
       const amp = laneH / 2 - LANE_PAD;
       for (let x = 0; x < w; x += step) {
         const tau = tauAt(x + BAR_WIDTH / 2);
-        const audio = lane.audioAt(tau);
+        const { audio, repeat } = lane.audioAt(tau);
         if (audio < 0 || audio > lane.track.duration) continue;
         const barH = Math.max(1, peakAt(lane.track, audio) * amp);
         const inside = tau >= 0 && tau <= m.d;
-        g.fillStyle = inside ? tk.wave : tk.waveDim;
+        g.fillStyle = inside && !repeat ? tk.wave : tk.waveDim;
         g.globalAlpha = inside && customizing !== null ? 0.6 : 1;
         g.fillRect(x, mid - barH, BAR_WIDTH, barH * 2);
       }
       g.globalAlpha = 1;
+
+      // ↺ where the loop jumps back to the window's start
+      if (lane.jumps.length > 0) {
+        g.fillStyle = tk.loop;
+        g.font = `${LOOP_MARK_SIZE}px system-ui, sans-serif`;
+        g.textAlign = 'center';
+        g.textBaseline = 'top';
+        for (const j of lane.jumps) {
+          const x = Math.round(xAt(j.time));
+          g.fillRect(x, lane.top + LANE_PAD, 1, laneH - LANE_PAD * 2);
+          g.fillText('↺', x, lane.top + 2);
+        }
+      }
 
       g.strokeStyle = tk.windowFrame;
       g.lineWidth = 2;

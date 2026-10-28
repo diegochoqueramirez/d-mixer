@@ -9,7 +9,7 @@ type Lane = 'out' | 'in';
 const LANES: Lane[] = ['out', 'in'];
 const LANE_NAMES: Record<Lane, string> = { out: 'curva de salida', in: 'curva de entrada' };
 /** What a point's value means in each edited lane. */
-const VALUE_NAMES: Record<EditLane, string> = { volume: 'volumen', eq: 'graves', filter: 'cierre' };
+const VALUE_NAMES: Record<EditLane, string> = { volume: 'volumen', eq: 'graves', filter: 'cierre', effect: 'envío' };
 
 /** Seconds moved by `,` and `.` (fine nudge, no snap). */
 const FINE_NUDGE_SECONDS = 0.01;

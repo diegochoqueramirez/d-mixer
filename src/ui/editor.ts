@@ -1,4 +1,4 @@
-import type { AppState, BarsOption, EditLane, EqStyle, FilterStyle, Track, TransitionPreset, VolumeStyle } from '../types';
+import type { AppState, BarsOption, EditLane, EffectStyle, EqStyle, FilterStyle, LoopStyle, Track, TransitionPreset, VolumeStyle } from '../types';
 import { BARS_OPTIONS, PRESET_ORDER, VOLUME_STYLES } from '../types';
 import {
   applyPreset,
@@ -12,8 +12,10 @@ import {
   resetCurve,
   resetToAuto,
   saveDraft,
+  setEffectStyle,
   setEqStyle,
   setFilterStyle,
+  setLoopStyle,
   setVolumeStyle,
   toggleCustomize,
   undo,
@@ -21,6 +23,7 @@ import {
   updateDraft,
 } from '../state';
 import { chipLabel, PRESETS, VOLUME_LABELS } from '../lib/curves';
+import { EFFECT_LABELS, EFFECT_STYLES, LOOP_LABELS, LOOP_STYLES, loopJumps } from '../lib/effects';
 import { EQ_LABELS, EQ_STYLES, FILTER_LABELS, FILTER_STYLES, filterShape, laneLines, laneScale } from '../lib/lanes';
 import type { PairValidation } from '../lib/validation';
 import { barsToSeconds, playbackRateFor } from '../lib/timing';
@@ -65,7 +68,7 @@ function createDeck(role: 'out' | 'in'): Deck {
   return { root, name, point, bpm, duration };
 }
 
-const EDIT_LANES: EditLane[] = ['volume', 'eq', 'filter'];
+const EDIT_LANES: EditLane[] = ['volume', 'eq', 'filter', 'effect'];
 
 interface LaneRow {
   el: HTMLElement;
@@ -157,7 +160,19 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
     volume: createLaneRow('volume', 'Volumen', VOLUME_STYLES.map((v) => [v, VOLUME_LABELS[v]]), (v) => setVolumeStyle(v as VolumeStyle)),
     eq: createLaneRow('eq', 'EQ', EQ_STYLES.map((v) => [v, EQ_LABELS[v]]), (v) => setEqStyle(v as EqStyle)),
     filter: createLaneRow('filter', 'Filtro', FILTER_STYLES.map((v) => [v, FILTER_LABELS[v]]), (v) => setFilterStyle(v as FilterStyle)),
+    effect: createLaneRow('effect', 'Efectos', EFFECT_STYLES.map((v) => [v, EFFECT_LABELS[v]]), (v) => setEffectStyle(v as EffectStyle)),
   };
+
+  // Looping has no curve, so its row is just the select.
+  const loopSelect = h('select', { class: 'pill-select', id: 'editor-looping' });
+  for (const v of LOOP_STYLES) loopSelect.append(h('option', { value: v }, LOOP_LABELS[v]));
+  loopSelect.addEventListener('change', () => setLoopStyle(loopSelect.value as LoopStyle));
+  const loopRow = h(
+    'div',
+    { class: 'lane-row', 'data-lane': 'looping' },
+    h('label', { class: 'lane-label', for: 'editor-looping' }, 'Looping'),
+    h('div', { class: 'lane-actions' }, loopSelect),
+  );
 
   const issues = h('ul', { class: 'issues', 'aria-live': 'polite' });
 
@@ -203,6 +218,8 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
     rows.volume.el,
     rows.eq.el,
     rows.filter.el,
+    rows.effect.el,
+    loopRow,
     issues,
   );
   dialog.setAttribute('aria-labelledby', 'editor-title');
@@ -354,8 +371,8 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         b.setAttribute('aria-pressed', String(active));
       }
       bars.value = String(t.bars);
-      const styles: Record<EditLane, string> = { volume: t.volume, eq: t.eq, filter: t.filter };
-      const customs: Record<EditLane, unknown> = { volume: t.customVolume, eq: t.customEq, filter: t.customFilter };
+      const styles: Record<EditLane, string> = { volume: t.volume, eq: t.eq, filter: t.filter, effect: t.effect };
+      const customs: Record<EditLane, unknown> = { volume: t.customVolume, eq: t.customEq, filter: t.customFilter, effect: t.customEffect };
       for (const lane of EDIT_LANES) {
         const row = rows[lane];
         const custom = customs[lane] !== null;
@@ -367,6 +384,7 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         row.resetBtn.hidden = !editing;
         row.resetBtn.disabled = !custom;
       }
+      loopSelect.value = t.looping;
 
       const previewing = next.playback === 'previewing';
       if (!previewing) stage.setPlayhead(null);
@@ -397,7 +415,9 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         overview.hidden = false;
         const stageFrom = { name: from.name, peaks: from.peaks!, duration: from.duration, bpm: from.bpm!, firstBeatOffset: from.firstBeatOffset };
         const stageTo = { name: to.name, peaks: to.peaks!, duration: to.duration, bpm: to.bpm!, firstBeatOffset: to.firstBeatOffset };
-        stage.draw({ from: stageFrom, to: stageTo, outStart: t.outStart, inStart: t.inStart, d, r, linesOut: lines.out, linesIn: lines.in });
+        const jumps = loopJumps(t, from.bpm!);
+        const loop = jumps.length > 0 ? { audioStart: t.outStart, jumps } : null;
+        stage.draw({ from: stageFrom, to: stageTo, outStart: t.outStart, inStart: t.inStart, d, r, linesOut: lines.out, linesIn: lines.in, loop });
         miniOut.draw({ ...stageFrom, windowStart: t.outStart, windowLength: d });
         miniIn.draw({ ...stageTo, windowStart: t.inStart, windowLength: d * r });
         stage.setCustomizing(editor.customizing);

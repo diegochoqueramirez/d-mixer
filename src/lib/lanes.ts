@@ -1,5 +1,6 @@
 import type { EditLane, EqStyle, FilterKind, FilterStyle, GainCurve, SideCurves, Transition, VolumeCurves } from '../types';
 import { volumeSamples } from './curves';
+import { effectSamples } from './effects';
 import { DEFAULT_SAMPLES, sampleGainCurve } from './gainCurve';
 
 // Shapes, frequencies and recipes follow vimj (a third-party reconstruction of Spotify Mix), see SPEC 04.
@@ -238,11 +239,11 @@ export interface LaneScale {
 }
 
 /**
- * Volume fills the lane from the bottom. EQ rests in the middle and cuts down from there. The filter is
+ * Volume and the effect send fill the lane from the bottom. EQ rests in the middle and cuts down from there. The filter is
  * open in the middle: a high-pass closing goes up, a low-pass closing goes down, and noise grows upwards.
  */
 export function laneScale(lane: EditLane, kind: FilterKind | null = null): LaneScale {
-  if (lane === 'volume') return { zero: 0, one: 1 };
+  if (lane === 'volume' || lane === 'effect') return { zero: 0, one: 1 };
   if (lane === 'eq') return { zero: 0, one: 0.5 };
   return kind === 'lowpass' ? { zero: 0.5, one: 0 } : { zero: 0.5, one: 1 };
 }
@@ -255,13 +256,17 @@ export interface LaneLine {
   faint: boolean;
 }
 
-/** Lines drawn over each song, back to front: EQ mid/high, filter, EQ bass, volume. Lanes that leave a song alone draw nothing. */
+/**
+ * Lines drawn over each song, back to front: EQ mid/high, filter, EQ bass, effect send, volume. Lanes that
+ * leave a song alone draw nothing; the effect only ever goes on the outgoing song.
+ */
 export function laneLines(t: Transition, n = DEFAULT_SAMPLES): { out: LaneLine[]; in: LaneLine[] } {
   const volume = volumeSamples(t, n);
   const eq = eqSamples(t, n);
   const filter = filterSamples(t, n);
+  const effect = effectSamples(t, n);
   const flat = (v: Float32Array) => v.every((x) => x === 1);
-  const side = (vol: Float32Array, e: EqSide | null, f: FilterSamples | null): LaneLine[] => {
+  const side = (vol: Float32Array, e: EqSide | null, f: FilterSamples | null, send: Float32Array | null): LaneLine[] => {
     const lines: LaneLine[] = [];
     if (e) {
       for (const band of [e.mid, e.high]) {
@@ -270,8 +275,9 @@ export function laneLines(t: Transition, n = DEFAULT_SAMPLES): { out: LaneLine[]
     }
     if (f) lines.push({ lane: 'filter', values: f.closure, scale: laneScale('filter', f.kind), faint: false });
     if (e && !flat(e.low)) lines.push({ lane: 'eq', values: e.low, scale: laneScale('eq'), faint: false });
+    if (send) lines.push({ lane: 'effect', values: send, scale: laneScale('effect'), faint: false });
     lines.push({ lane: 'volume', values: vol, scale: laneScale('volume'), faint: false });
     return lines;
   };
-  return { out: side(volume.out, eq.out, filter.out), in: side(volume.in, eq.in, filter.in) };
+  return { out: side(volume.out, eq.out, filter.out, effect), in: side(volume.in, eq.in, filter.in, null) };
 }
