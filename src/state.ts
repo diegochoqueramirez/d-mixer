@@ -37,6 +37,35 @@ export function updateTrack(id: string, patch: Partial<Track>): void {
   setState((s) => ({ tracks: s.tracks.map((t) => (t.id === id ? { ...t, ...patch } : t)) }));
 }
 
+export interface RemovedTrack {
+  /** Same object: keeps its decoded buffer, BPM and status. */
+  track: Track;
+  /** Position in state.tracks before removal. */
+  index: number;
+}
+
+/** Removes a track and returns what is needed to put it back. */
+export function removeTrack(id: string): RemovedTrack | null {
+  const index = state.tracks.findIndex((t) => t.id === id);
+  if (index < 0) return null;
+  const track = state.tracks[index];
+  setState((s) => ({ tracks: s.tracks.filter((t) => t.id !== id) }));
+  return { track, index };
+}
+
+/**
+ * Re-inserts the track at its old index (clamped to the list length). Transitions are never
+ * deleted when a track leaves, so its pairs find their saved transitions again.
+ */
+export function restoreTrack(removed: RemovedTrack): void {
+  setState((s) => {
+    if (s.tracks.some((t) => t.id === removed.track.id)) return {};
+    const tracks = [...s.tracks];
+    tracks.splice(Math.min(removed.index, tracks.length), 0, removed.track);
+    return { tracks };
+  });
+}
+
 export function pairKey(fromId: string, toId: string): string {
   return `${fromId}->${toId}`;
 }

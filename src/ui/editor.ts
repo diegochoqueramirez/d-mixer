@@ -31,6 +31,8 @@ import { formatBpm, formatDuration, formatTime, h, icon, setIcon } from './dom';
 import { createBpmPopover } from './bpmPopover';
 import { createCurveEditor } from './curveEditor';
 import { createMinimap, createStage } from './waveform';
+import { FADE, SPRING, animate, prefersReducedMotion, pressFeedback, slideIn, slideOut } from './motion';
+import { createSheet } from './sheet';
 
 export interface EditorHandlers {
   /** Starts (or restarts) the looped preview of the draft. */
@@ -70,33 +72,41 @@ function createDeck(role: 'out' | 'in'): Deck {
 
 const EDIT_LANES: EditLane[] = ['volume', 'eq', 'filter', 'effect'];
 
+const LANE_NAMES: Record<EditLane, string> = { volume: 'Volumen', eq: 'EQ', filter: 'Filtro', effect: 'Efectos' };
+
 interface LaneRow {
   el: HTMLElement;
   select: HTMLSelectElement;
   customOption: HTMLOptionElement;
   customizeBtn: HTMLButtonElement;
-  resetBtn: HTMLButtonElement;
 }
 
-/** One lane of the editor: its style select, "Personalizar" / "Listo" and "Restablecer curva". */
-function createLaneRow(lane: EditLane, label: string, options: [string, string][], onStyle: (value: string) => void): LaneRow {
+/** A row of the settings card: the label on top (with an optional action) and the control below. */
+function settingRow(id: string, label: string, control: HTMLElement, action?: HTMLElement, lane?: string): HTMLElement {
+  return h(
+    'div',
+    { class: 'setting', 'data-lane': lane },
+    h('label', { class: 'setting-label', for: id }, label),
+    ...(action ? [action] : []),
+    control,
+  );
+}
+
+/** One lane of the editor: its style select and "Personalizar" / "Listo". */
+function createLaneRow(lane: EditLane, options: [string, string][], onStyle: (value: string) => void): LaneRow {
   const id = `editor-${lane}`;
   const select = h('select', { class: 'pill-select', id });
   for (const [value, text] of options) select.append(h('option', { value }, text));
   const customOption = h('option', { value: 'custom', disabled: true }, 'Personalizada');
   select.append(customOption);
-  const customizeBtn = h('button', { class: 'pill-btn customize-btn', type: 'button', 'aria-pressed': 'false' }, 'Personalizar');
-  const resetBtn = h('button', { class: 'pill-btn', type: 'button' }, 'Restablecer curva');
+  const customizeBtn = h(
+    'button',
+    { class: 'text-btn customize-btn', type: 'button', 'aria-pressed': 'false', 'aria-label': `Personalizar ${LANE_NAMES[lane]}` },
+    'Personalizar',
+  );
   select.addEventListener('change', () => onStyle(select.value));
   customizeBtn.addEventListener('click', () => toggleCustomize(lane));
-  resetBtn.addEventListener('click', () => resetCurve(lane));
-  const el = h(
-    'div',
-    { class: 'lane-row', 'data-lane': lane },
-    h('label', { class: 'lane-label', for: id }, label),
-    h('div', { class: 'lane-actions' }, select, customizeBtn, resetBtn),
-  );
-  return { el, select, customOption, customizeBtn, resetBtn };
+  return { el: settingRow(id, LANE_NAMES[lane], select, customizeBtn, lane), select, customOption, customizeBtn };
 }
 
 export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers): EditorView {
@@ -116,15 +126,21 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   const redoBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Rehacer', title: 'Rehacer' }, icon('redo'));
   const prevBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Transición anterior', title: 'Transición anterior' }, icon('prev'));
   const nextBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Transición siguiente', title: 'Transición siguiente' }, icon('next'));
-  const title = h('h2', { class: 'editor-title', id: 'editor-title' });
+  // showModal() focuses [autofocus]: the title, so no button opens with a focus ring
+  const title = h('h2', { class: 'editor-title', id: 'editor-title', tabindex: -1, autofocus: true });
   const saveBtn = h('button', { class: 'save-btn', type: 'button' }, 'Guardar');
   const bar = h(
     'header',
     { class: 'editor-bar' },
-    h('div', { class: 'editor-bar-start' }, closeBtn, undoBtn, redoBtn),
-    h('div', { class: 'editor-nav' }, prevBtn, title, nextBtn),
-    saveBtn,
+    h('div', { class: 'editor-bar-row' }, closeBtn, title, saveBtn),
+    h(
+      'div',
+      { class: 'editor-toolbar' },
+      h('div', { class: 'toolbar-group' }, undoBtn, redoBtn),
+      h('div', { class: 'toolbar-group' }, prevBtn, nextBtn),
+    ),
   );
+  const grabber = h('div', { class: 'sheet-grabber', 'aria-hidden': 'true' });
 
   // overview, decks, stage
   const deckOut = createDeck('out');
@@ -140,14 +156,16 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
 
   const playBtn = h('button', { class: 'round-btn', type: 'button' }, icon('play'));
   const stage = createStage(playBtn, setOut, setIn, restartAfterDrag);
-  const stageEmpty = h('p', { class: 'stage-empty' });
+  const stageEmptyText = h('p', { class: 'stage-empty-text' });
+  const stageEmptyBtn = h('button', { class: 'primary-btn', type: 'button' }, 'Escribir BPM');
+  const stageEmpty = h('div', { class: 'stage-empty' }, stageEmptyText, stageEmptyBtn);
 
   // controls
-  const bars = h('select', { class: 'pill-select', 'aria-label': 'Duración de la transición' });
+  const bars = h('select', { class: 'pill-select', id: 'editor-bars' });
   for (const b of BARS_OPTIONS) bars.append(h('option', { value: b }, `${b} ${b === 1 ? 'compás' : 'compases'}`));
 
   const presetButtons = new Map<TransitionPreset | 'auto', HTMLButtonElement>();
-  const presets = h('div', { class: 'presets', role: 'group', 'aria-label': 'Presets' });
+  const presets = h('div', { class: 'presets', role: 'group', 'aria-labelledby': 'presets-title' });
   for (const p of ['auto', ...PRESET_ORDER] as const) {
     const label = p === 'auto' ? 'Auto' : PRESETS[p].label;
     const b = h('button', { class: 'preset', type: 'button', 'aria-pressed': 'false' }, label);
@@ -157,35 +175,59 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   }
 
   const rows: Record<EditLane, LaneRow> = {
-    volume: createLaneRow('volume', 'Volumen', VOLUME_STYLES.map((v) => [v, VOLUME_LABELS[v]]), (v) => setVolumeStyle(v as VolumeStyle)),
-    eq: createLaneRow('eq', 'EQ', EQ_STYLES.map((v) => [v, EQ_LABELS[v]]), (v) => setEqStyle(v as EqStyle)),
-    filter: createLaneRow('filter', 'Filtro', FILTER_STYLES.map((v) => [v, FILTER_LABELS[v]]), (v) => setFilterStyle(v as FilterStyle)),
-    effect: createLaneRow('effect', 'Efectos', EFFECT_STYLES.map((v) => [v, EFFECT_LABELS[v]]), (v) => setEffectStyle(v as EffectStyle)),
+    volume: createLaneRow('volume', VOLUME_STYLES.map((v) => [v, VOLUME_LABELS[v]]), (v) => setVolumeStyle(v as VolumeStyle)),
+    eq: createLaneRow('eq', EQ_STYLES.map((v) => [v, EQ_LABELS[v]]), (v) => setEqStyle(v as EqStyle)),
+    filter: createLaneRow('filter', FILTER_STYLES.map((v) => [v, FILTER_LABELS[v]]), (v) => setFilterStyle(v as FilterStyle)),
+    effect: createLaneRow('effect', EFFECT_STYLES.map((v) => [v, EFFECT_LABELS[v]]), (v) => setEffectStyle(v as EffectStyle)),
   };
 
   // Looping has no curve, so its row is just the select.
   const loopSelect = h('select', { class: 'pill-select', id: 'editor-looping' });
   for (const v of LOOP_STYLES) loopSelect.append(h('option', { value: v }, LOOP_LABELS[v]));
   loopSelect.addEventListener('change', () => setLoopStyle(loopSelect.value as LoopStyle));
-  const loopRow = h(
+
+  const settings = h(
     'div',
-    { class: 'lane-row', 'data-lane': 'looping' },
-    h('label', { class: 'lane-label', for: 'editor-looping' }, 'Looping'),
-    h('div', { class: 'lane-actions' }, loopSelect),
+    { class: 'settings-card' },
+    settingRow('editor-bars', 'Duración', bars),
+    rows.volume.el,
+    rows.eq.el,
+    rows.filter.el,
+    rows.effect.el,
+    settingRow('editor-looping', 'Looping', loopSelect, undefined, 'looping'),
+  );
+
+  // "Personalizar" mode: what is being edited, how, and the way out, right under the waveforms
+  const editTitle = h('p', { class: 'edit-title' });
+  const resetBtn = h('button', { class: 'pill-btn', type: 'button' }, 'Restablecer curva');
+  const doneBtn = h('button', { class: 'save-btn', type: 'button' }, 'Listo');
+  const editBar = h(
+    'div',
+    { class: 'edit-bar', hidden: true },
+    h('span', { class: 'edit-dot', 'aria-hidden': 'true' }),
+    h(
+      'div',
+      { class: 'edit-info' },
+      editTitle,
+      h('p', { class: 'edit-hint' }, 'Arrastra los puntos. Doble toque para añadir o quitar uno.'),
+    ),
+    h('div', { class: 'edit-actions' }, resetBtn, doneBtn),
   );
 
   const issues = h('ul', { class: 'issues', 'aria-live': 'polite' });
 
-  // confirmation (close with changes, or move to another pair with changes)
-  const confirmTitle = h('p', { class: 'confirm-title', id: 'confirm-title' });
-  const keepBtn = h('button', { class: 'pill-btn', type: 'button' }, 'Seguir editando');
-  const discardBtn = h('button', { class: 'danger-btn', type: 'button' }, 'Descartar');
-  const confirmSaveBtn = h('button', { class: 'save-btn', type: 'button' }, 'Guardar');
-  const confirm = h(
+  // confirmation (close with changes, or move to another pair with changes): an iOS action sheet
+  const confirmTitle = h('p', { class: 'action-title', id: 'confirm-title' });
+  const keepBtn = h('button', { class: 'action action--cancel', type: 'button' }, 'Seguir editando');
+  const discardBtn = h('button', { class: 'action action--danger', type: 'button' }, 'Descartar');
+  const confirmSaveBtn = h('button', { class: 'action', type: 'button' }, 'Guardar');
+  const actionSheet = h(
     'div',
-    { class: 'confirm', role: 'alertdialog', 'aria-labelledby': 'confirm-title', hidden: true },
-    h('div', { class: 'confirm-box' }, confirmTitle, h('div', { class: 'confirm-actions' }, keepBtn, discardBtn, confirmSaveBtn)),
+    { class: 'action-sheet' },
+    h('div', { class: 'action-group' }, confirmTitle, confirmSaveBtn, discardBtn),
+    h('div', { class: 'action-group' }, keepBtn),
   );
+  const confirm = h('div', { class: 'confirm', role: 'alertdialog', 'aria-labelledby': 'confirm-title', hidden: true }, actionSheet);
 
   const popover = createBpmPopover();
 
@@ -213,17 +255,48 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
     stage.el,
     stageEmpty,
     deckIn.root,
-    h('div', { class: 'editor-controls' }, bars),
-    presets,
-    rows.volume.el,
-    rows.eq.el,
-    rows.filter.el,
-    rows.effect.el,
-    loopRow,
+    editBar,
     issues,
+    h('section', { class: 'editor-section', 'aria-labelledby': 'presets-title' }, h('h3', { class: 'section-title', id: 'presets-title' }, 'Preset'), presets),
+    h('section', { class: 'editor-section', 'aria-labelledby': 'settings-title' }, h('h3', { class: 'section-title', id: 'settings-title' }, 'Ajustes'), settings),
   );
   dialog.setAttribute('aria-labelledby', 'editor-title');
-  dialog.append(bar, body, popover.el, confirm);
+  const backdrop = h('div', { class: 'sheet-backdrop' });
+  const panel = h('div', { class: 'sheet-panel' }, grabber, bar, body, popover.el, confirm);
+  dialog.append(backdrop, panel);
+  pressFeedback([...panel.querySelectorAll('button:not(.nudge)')]);
+
+  const sheet = createSheet(dialog, {
+    panel,
+    backdrop,
+    body,
+    handles: [grabber, bar],
+    isDirty: () => !!state?.editor?.dirty,
+    onDragClose: () => closeEditor(),
+    onDragConfirm: () => askConfirm({ kind: 'close' }),
+  });
+
+  let sliding = false;
+  /** Pair the slide in flight will land on; taps during the slide move it further. */
+  let slideTarget = 0;
+  let slideSave = false;
+
+  /** The pair on screen, or the one a running slide is heading to. */
+  const currentPair = () => (sliding ? slideTarget : state?.editor?.pairIndex ?? 0);
+
+  /** Moves to another pair: the content leaves towards one side and the new pair enters from the other. */
+  function navigate(pairIndex: number, save: boolean) {
+    slideTarget = pairIndex;
+    if (sliding) return;
+    slideSave = save;
+    const dir = Math.sign(pairIndex - (state?.editor?.pairIndex ?? pairIndex)) || 1;
+    sliding = true;
+    void slideOut(body, dir).then(() => {
+      sliding = false;
+      goToPair(slideTarget, slideSave);
+      slideIn(body, dir);
+    });
+  }
 
   // ---------- behaviour ----------
 
@@ -232,8 +305,29 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
     const navigating = target.kind === 'navigate';
     confirmTitle.textContent = navigating ? '¿Guardar cambios antes de cambiar de transición?' : '¿Descartar cambios?';
     confirmSaveBtn.hidden = !navigating;
+    const wasHidden = confirm.hidden;
     confirm.hidden = false;
+    if (wasHidden) {
+      animate(confirm, { opacity: [0, 1] }, { duration: 200, ease: 'easeOut' });
+      if (prefersReducedMotion()) animate(actionSheet, { opacity: [0, 1] }, FADE);
+      else animate(actionSheet, { y: [actionSheet.offsetHeight + 24, 0] }, SPRING.sheetOpen);
+    }
     (navigating ? confirmSaveBtn : keepBtn).focus();
+  }
+
+  /** Hides the action sheet; `then` runs once it is out of the way. */
+  function hideConfirm(then?: () => void) {
+    if (confirm.hidden) return then?.();
+    const out = prefersReducedMotion()
+      ? animate(actionSheet, { opacity: 0 }, FADE)
+      : animate(actionSheet, { y: actionSheet.offsetHeight + 24 }, SPRING.sheetClose);
+    animate(confirm, { opacity: 0 }, { duration: 200, ease: 'easeOut' });
+    void out.then(() => {
+      confirm.hidden = true;
+      confirm.style.opacity = '';
+      actionSheet.style.opacity = '';
+      then?.();
+    });
   }
 
   function requestClose() {
@@ -243,30 +337,50 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
 
   function requestPair(pairIndex: number) {
     const editor = state?.editor;
-    if (!editor || pairIndex < 0 || pairIndex >= pairCount || pairIndex === editor.pairIndex) return;
-    if (editor.dirty) askConfirm({ kind: 'navigate', pairIndex });
-    else goToPair(pairIndex, false);
+    if (!editor || pairIndex < 0 || pairIndex >= pairCount || pairIndex === currentPair()) return;
+    // the unsaved-changes question was already answered for the slide in flight
+    if (sliding) navigate(pairIndex, slideSave);
+    else if (editor.dirty) askConfirm({ kind: 'navigate', pairIndex });
+    else navigate(pairIndex, false);
   }
 
   closeBtn.addEventListener('click', requestClose);
   saveBtn.addEventListener('click', saveDraft);
   undoBtn.addEventListener('click', undo);
   redoBtn.addEventListener('click', redo);
-  prevBtn.addEventListener('click', () => state?.editor && requestPair(state.editor.pairIndex - 1));
-  nextBtn.addEventListener('click', () => state?.editor && requestPair(state.editor.pairIndex + 1));
-  keepBtn.addEventListener('click', () => {
-    confirm.hidden = true;
-    closeBtn.focus();
+  prevBtn.addEventListener('click', () => requestPair(currentPair() - 1));
+  nextBtn.addEventListener('click', () => requestPair(currentPair() + 1));
+  keepBtn.addEventListener('click', () => hideConfirm(() => title.focus()));
+  // a tap on the dimmed area is "Seguir editando", like an iOS action sheet
+  confirm.addEventListener('click', (e) => {
+    if (e.target === confirm) hideConfirm(() => title.focus());
   });
   discardBtn.addEventListener('click', () => {
-    confirm.hidden = true;
-    if (confirmTarget.kind === 'navigate') goToPair(confirmTarget.pairIndex, false);
+    const target = confirmTarget;
+    hideConfirm();
+    if (target.kind === 'navigate') navigate(target.pairIndex, false);
     else closeEditor();
   });
   confirmSaveBtn.addEventListener('click', () => {
-    confirm.hidden = true;
-    if (confirmTarget.kind === 'navigate') goToPair(confirmTarget.pairIndex, true);
+    const target = confirmTarget;
+    hideConfirm();
+    if (target.kind === 'navigate') navigate(target.pairIndex, true);
   });
+  resetBtn.addEventListener('click', () => {
+    const lane = state?.editor?.customizing;
+    if (lane) resetCurve(lane);
+  });
+  doneBtn.addEventListener('click', () => {
+    const lane = state?.editor?.customizing;
+    if (lane) toggleCustomize(lane);
+  });
+  stageEmptyBtn.addEventListener('click', () => {
+    const missing = [deckOut, deckIn].find((d) => d.bpm.classList.contains('is-missing'));
+    const id = missing?.bpm.dataset.track;
+    if (missing && id) popover.open(id, missing.bpm);
+  });
+  // the popover is anchored to a BPM that scrolls with the body
+  body.addEventListener('scroll', () => popover.close(), { passive: true });
 
   // Shortcuts: undo/redo and [ ] between pairs. Never while typing in a field.
   dialog.addEventListener('keydown', (e) => {
@@ -277,9 +391,9 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
       if (e.shiftKey) redo();
       else undo();
     } else if (!mod && e.key === '[') {
-      requestPair(state.editor.pairIndex - 1);
+      requestPair(currentPair() - 1);
     } else if (!mod && e.key === ']') {
-      requestPair(state.editor.pairIndex + 1);
+      requestPair(currentPair() + 1);
     } else {
       return;
     }
@@ -288,16 +402,17 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
 
   function renderIssues() {
     if (!validation) return;
+    const item = (kind: 'error' | 'warning', text: string) => h('li', { class: `issue issue--${kind}` }, icon('warning'), h('span', {}, text));
     issues.replaceChildren(
-      ...validation.errors.map((e) => h('li', { class: 'issue issue--error' }, e.message)),
-      ...validation.warnings.map((w) => h('li', { class: 'issue issue--warning' }, w.message)),
-      ...(limitShown ? [h('li', { class: 'issue issue--warning' }, 'Máximo 32 puntos por curva')] : []),
+      ...validation.errors.map((e) => item('error', e.message)),
+      ...validation.warnings.map((w) => item('warning', w.message)),
+      ...(limitShown ? [item('warning', 'Máximo 32 puntos por curva')] : []),
     );
   }
   dialog.addEventListener('cancel', (e) => {
     e.preventDefault();
     if (popover.isOpen()) popover.close();
-    else if (!confirm.hidden) confirm.hidden = true;
+    else if (!confirm.hidden) hideConfirm(() => title.focus());
     else requestClose();
   });
 
@@ -333,18 +448,23 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         curveEditor.update(null, false);
         popover.close();
         confirm.hidden = true;
-        if (dialog.open) {
-          dialog.close();
+        if (dialog.open && !sheet.isClosing()) {
           const pair = openPair;
           // Audio and focus changes update state; run them after this render finishes.
-          if (pair !== null) queueMicrotask(() => handlers.onClosed(pair));
+          if (next.playback === 'previewing') queueMicrotask(handlers.onStop);
+          void sheet.close().then((closed) => {
+            if (closed && pair !== null) handlers.onClosed(pair);
+          });
         }
         openPair = null;
         return;
       }
 
-      const justOpened = !dialog.open;
-      if (justOpened) dialog.showModal();
+      const justOpened = !dialog.open || sheet.isClosing();
+      if (justOpened) {
+        sheet.open();
+        body.scrollTop = 0;
+      }
       // Opening the editor or moving to another pair both start the preview of the new pair.
       const pairChanged = justOpened || openPair !== editor.pairIndex;
       openPair = editor.pairIndex;
@@ -381,8 +501,13 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         row.customOption.hidden = !custom;
         row.customizeBtn.textContent = editing ? 'Listo' : 'Personalizar';
         row.customizeBtn.setAttribute('aria-pressed', String(editing));
-        row.resetBtn.hidden = !editing;
-        row.resetBtn.disabled = !custom;
+        row.el.classList.toggle('is-editing', editing);
+      }
+      const editing = editor.customizing;
+      if (editing) {
+        editTitle.textContent = `Editando ${LANE_NAMES[editing]}`;
+        editBar.dataset.lane = editing;
+        resetBtn.disabled = customs[editing] === null;
       }
       loopSelect.value = t.looping;
 
@@ -398,8 +523,10 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         fillDeck(deckOut, from, '');
         fillDeck(deckIn, to, '');
         const missing = [from, to].filter((x) => x.bpm === null).map((x) => x.name);
-        stageEmpty.textContent = `Toca el BPM de ${missing.join(' y ')} para escribirlo y ver la transición.`;
+        stageEmptyText.textContent = `Toca el BPM de ${missing.join(' y ')} para escribirlo y ver la transición.`;
+        stageEmptyBtn.hidden = missing.length === 0;
         stageEmpty.hidden = false;
+        editBar.hidden = true;
         stage.el.hidden = true;
         overview.hidden = true;
         stage.draw(null);
@@ -422,6 +549,14 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         miniIn.draw({ ...stageTo, windowStart: t.inStart, windowLength: d * r });
         stage.setCustomizing(editor.customizing);
         overview.classList.toggle('is-locked', editor.customizing !== null);
+        const showEdit = editor.customizing !== null;
+        if (showEdit && editBar.hidden) {
+          editBar.hidden = false;
+          if (prefersReducedMotion()) animate(editBar, { opacity: [0, 1] }, FADE);
+          else animate(editBar, { opacity: [0, 1], y: [-8, 0] }, SPRING.rowEnter);
+        } else if (!showEdit) {
+          editBar.hidden = true;
+        }
         const lane = editor.customizing ?? 'volume';
         const shape = filterShape(t.filter);
         const scales = {

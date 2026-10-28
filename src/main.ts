@@ -1,6 +1,6 @@
 import './styles.css';
 import type { TimelineEntry, Track } from './types';
-import { derive, getState, openEditor, pairKey, pairsWithDraft, setState, subscribe, updateTrack } from './state';
+import { derive, getState, openEditor, pairKey, pairsWithDraft, removeTrack, setState, subscribe, updateTrack } from './state';
 import { buildSequentialTimeline, buildTimeline, clipTimeline, previewRange } from './lib/timeline';
 import { computePeaks, decodeFile, trackNameFromFile } from './audio/loader';
 import { detectTempo } from './audio/bpm';
@@ -8,6 +8,7 @@ import * as engine from './audio/engine';
 import { mountPlaylist } from './ui/playlist';
 import { mountEditor } from './ui/editor';
 import { mountTransport, mixBlocker } from './ui/transport';
+import { createToast } from './ui/toast';
 
 async function loadTrack(id: string, file: File) {
   try {
@@ -93,6 +94,8 @@ function stopPlayback() {
   editor.tick(() => null);
 }
 
+const toast = createToast();
+
 const playlist = mountPlaylist(
   document.querySelector<HTMLElement>('#header-actions')!,
   document.querySelector<HTMLElement>('#playlist')!,
@@ -100,6 +103,10 @@ const playlist = mountPlaylist(
   (pairIndex) => {
     engine.getAudioContext();
     openEditor(pairIndex);
+  },
+  (id) => {
+    const removed = removeTrack(id);
+    if (removed) toast.show(removed);
   },
 );
 const editor = mountEditor(document.querySelector<HTMLDialogElement>('#editor')!, {
@@ -110,7 +117,23 @@ const editor = mountEditor(document.querySelector<HTMLDialogElement>('#editor')!
     playlist.focusChip(pairIndex);
   },
 });
-const transport = mountTransport(document.querySelector<HTMLElement>('#transport')!, { onPlayMix: playMix, onStop: stopPlayback });
+const transportEl = document.querySelector<HTMLElement>('#transport')!;
+const transport = mountTransport(transportEl, {
+  onPlayMix: playMix,
+  onStop: stopPlayback,
+  onFix: (pairIndex) => {
+    engine.getAudioContext();
+    openEditor(pairIndex);
+  },
+});
+transportEl.append(toast.el);
+
+// iOS large title: once it scrolls under the bar, the bar shows the small title on a translucent background
+const navbar = document.querySelector<HTMLElement>('#navbar')!;
+new IntersectionObserver(
+  ([entry]) => navbar.classList.toggle('is-compact', !entry.isIntersecting),
+  { rootMargin: `-${navbar.offsetHeight}px 0px 0px 0px` },
+).observe(document.querySelector('#large-title')!);
 
 function render() {
   const state = getState();
@@ -121,3 +144,11 @@ function render() {
 
 subscribe(render);
 render();
+
+// The playlist only lives in memory: warn before a reload or close throws it away (desktop browsers;
+// iOS Safari never shows this prompt).
+window.addEventListener('beforeunload', (e) => {
+  if (getState().tracks.length === 0) return;
+  e.preventDefault();
+  e.returnValue = '';
+});

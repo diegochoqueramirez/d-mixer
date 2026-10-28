@@ -1,6 +1,7 @@
 import type { Track } from '../types';
 import { getState, updateTrack } from '../state';
 import { formatBpm, h } from './dom';
+import { FADE, SPRING, animate, prefersReducedMotion } from './motion';
 
 const MIN_BPM = 30;
 const MAX_BPM = 300;
@@ -24,12 +25,15 @@ export function createBpmPopover(): BpmPopover {
   const double = h('button', { class: 'chip-btn', type: 'button', 'aria-label': 'Duplicar BPM' }, '×2');
   const half = h('button', { class: 'chip-btn', type: 'button', 'aria-label': 'Dividir el BPM a la mitad' }, '÷2');
   const offset = h('input', { type: 'number', class: 'field field--offset', min: 0, step: 0.01, inputmode: 'decimal', id: 'popover-offset' });
+  // touch has no "click outside" habit: an explicit way out (fields commit on blur)
+  const done = h('button', { class: 'save-btn popover-done', type: 'button' }, 'Listo');
   const el = h(
     'div',
     { class: 'popover', role: 'dialog', 'aria-modal': 'false', hidden: true },
     title,
     h('div', { class: 'popover-row' }, h('label', { class: 'field-unit', for: 'popover-bpm' }, 'BPM'), bpm, double, half),
     h('div', { class: 'popover-row' }, h('label', { class: 'field-unit', for: 'popover-offset' }, 'Primer beat (s)'), offset),
+    done,
   );
   el.setAttribute('aria-label', 'Editar BPM');
 
@@ -69,6 +73,8 @@ export function createBpmPopover(): BpmPopover {
     sync();
   });
 
+  done.addEventListener('click', () => close());
+
   function close() {
     if (el.hidden) return;
     el.hidden = true;
@@ -100,6 +106,9 @@ export function createBpmPopover(): BpmPopover {
       const hostRect = host?.getBoundingClientRect() ?? new DOMRect();
       el.style.top = `${a.bottom - hostRect.top + (host?.scrollTop ?? 0) + 6}px`;
       el.style.left = `${Math.max(8, Math.min(a.right - hostRect.left - el.offsetWidth, hostRect.width - el.offsetWidth - 8))}px`;
+      // grows out of its anchor, like an iOS popover
+      if (prefersReducedMotion()) animate(el, { opacity: [0, 1] }, FADE);
+      else animate(el, { opacity: [0, 1], scale: [0.94, 1] }, SPRING.rowLift);
       bpm.focus();
       bpm.select();
     },
