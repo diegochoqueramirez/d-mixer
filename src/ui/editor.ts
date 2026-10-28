@@ -1,15 +1,15 @@
-import type { AppState, BarsOption, EditLane, EffectStyle, EqStyle, FilterStyle, LoopStyle, Track, TransitionPreset, VolumeStyle } from '../types';
-import { BARS_OPTIONS, PRESET_ORDER, VOLUME_STYLES } from '../types';
+import type { AppState, BarsOption, EffectStyle, EqStyle, FilterStyle, LoopStyle, Track, TransitionPreset, VolumeStyle } from '../types';
+import { PRESET_ORDER } from '../types';
 import {
   applyPreset,
   beginGesture,
+  cancelGesture,
   closeEditor,
   editableCurves,
   endGesture,
   goToPair,
   pairsWithDraft,
   redo,
-  resetCurve,
   resetToAuto,
   saveDraft,
   setEffectStyle,
@@ -22,14 +22,16 @@ import {
   updateCustomCurve,
   updateDraft,
 } from '../state';
-import { chipLabel, PRESETS, VOLUME_LABELS } from '../lib/curves';
-import { EFFECT_LABELS, EFFECT_STYLES, LOOP_LABELS, LOOP_STYLES, loopJumps } from '../lib/effects';
-import { EQ_LABELS, EQ_STYLES, FILTER_LABELS, FILTER_STYLES, filterShape, laneLines, laneScale } from '../lib/lanes';
+import { chipLabel, PRESETS } from '../lib/curves';
+import { loopJumps } from '../lib/effects';
+import { filterShape, laneLines, laneScale } from '../lib/lanes';
 import type { PairValidation } from '../lib/validation';
 import { barsToSeconds, playbackRateFor } from '../lib/timing';
 import { formatBpm, formatDuration, formatTime, h, icon, setIcon } from './dom';
 import { createBpmPopover } from './bpmPopover';
 import { createCurveEditor } from './curveEditor';
+import { createBarsSheet } from './barsSheet';
+import { createLaneSheets, laneValueLabel, SHEET_LANE_NAMES, SHEET_LANES, type SheetLane } from './laneSheets';
 import { createMinimap, createStage } from './waveform';
 import { FADE, SPRING, animate, prefersReducedMotion, pressFeedback, slideIn, slideOut } from './motion';
 import { createSheet } from './sheet';
@@ -47,6 +49,9 @@ export interface EditorView {
   /** Redraws only the playhead; called every animation frame while audio plays. */
   tick(mixTimeOf: (incomingId: string) => number | null): void;
 }
+
+/** The minimaps give way to the song headers this long after the last touch. */
+const MINIMAP_HIDE_MS = 2000;
 
 interface Deck {
   root: HTMLElement;
@@ -70,44 +75,7 @@ function createDeck(role: 'out' | 'in'): Deck {
   return { root, name, point, bpm, duration };
 }
 
-const EDIT_LANES: EditLane[] = ['volume', 'eq', 'filter', 'effect'];
-
-const LANE_NAMES: Record<EditLane, string> = { volume: 'Volumen', eq: 'EQ', filter: 'Filtro', effect: 'Efectos' };
-
-interface LaneRow {
-  el: HTMLElement;
-  select: HTMLSelectElement;
-  customOption: HTMLOptionElement;
-  customizeBtn: HTMLButtonElement;
-}
-
-/** A row of the settings card: the label on top (with an optional action) and the control below. */
-function settingRow(id: string, label: string, control: HTMLElement, action?: HTMLElement, lane?: string): HTMLElement {
-  return h(
-    'div',
-    { class: 'setting', 'data-lane': lane },
-    h('label', { class: 'setting-label', for: id }, label),
-    ...(action ? [action] : []),
-    control,
-  );
-}
-
-/** One lane of the editor: its style select and "Personalizar" / "Listo". */
-function createLaneRow(lane: EditLane, options: [string, string][], onStyle: (value: string) => void): LaneRow {
-  const id = `editor-${lane}`;
-  const select = h('select', { class: 'pill-select', id });
-  for (const [value, text] of options) select.append(h('option', { value }, text));
-  const customOption = h('option', { value: 'custom', disabled: true }, 'Personalizada');
-  select.append(customOption);
-  const customizeBtn = h(
-    'button',
-    { class: 'text-btn customize-btn', type: 'button', 'aria-pressed': 'false', 'aria-label': `Personalizar ${LANE_NAMES[lane]}` },
-    'Personalizar',
-  );
-  select.addEventListener('change', () => onStyle(select.value));
-  customizeBtn.addEventListener('click', () => toggleCustomize(lane));
-  return { el: settingRow(id, LANE_NAMES[lane], select, customizeBtn, lane), select, customOption, customizeBtn };
-}
+const barsText = (bars: number) => `${bars} ${bars === 1 ? 'compás' : 'compases'}`;
 
 export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers): EditorView {
   let state: AppState | null = null;
@@ -116,33 +84,33 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   let lastSignature = '';
   let pairCount = 0;
   let limitShown = false;
+  let drawable = false;
   let validation: PairValidation | null = null;
+  /** Lane whose sheet is open (the editor is in "sheet mode"); null = none. */
+  let openLane: SheetLane | null = null;
   /** What the confirmation box is asking about: closing the editor or moving to another pair. */
   let confirmTarget: { kind: 'close' } | { kind: 'navigate'; pairIndex: number } = { kind: 'close' };
 
-  // top bar
-  const closeBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Cerrar editor' }, icon('remove'));
+  // top bar, like Spotify Mix: ✕ · chip · Guardar
+  const closeBtn = h('button', { class: 'close-btn', type: 'button', 'aria-label': 'Cerrar editor' }, icon('remove'));
+  // showModal() focuses [autofocus]: the title, so no button opens with a focus ring
+  const title = h('h2', { class: 'editor-title', id: 'editor-title', tabindex: -1, autofocus: true });
+  const saveBtn = h('button', { class: 'bar-save', type: 'button' }, 'Guardar');
+  const bar = h('header', { class: 'editor-bar' }, closeBtn, title, saveBtn);
+
+  // bottom bar: what Spotify does not have
   const undoBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Deshacer', title: 'Deshacer' }, icon('undo'));
   const redoBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Rehacer', title: 'Rehacer' }, icon('redo'));
   const prevBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Transición anterior', title: 'Transición anterior' }, icon('prev'));
   const nextBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Transición siguiente', title: 'Transición siguiente' }, icon('next'));
-  // showModal() focuses [autofocus]: the title, so no button opens with a focus ring
-  const title = h('h2', { class: 'editor-title', id: 'editor-title', tabindex: -1, autofocus: true });
-  const saveBtn = h('button', { class: 'save-btn', type: 'button' }, 'Guardar');
-  const bar = h(
-    'header',
-    { class: 'editor-bar' },
-    h('div', { class: 'editor-bar-row' }, closeBtn, title, saveBtn),
-    h(
-      'div',
-      { class: 'editor-toolbar' },
-      h('div', { class: 'toolbar-group' }, undoBtn, redoBtn),
-      h('div', { class: 'toolbar-group' }, prevBtn, nextBtn),
-    ),
+  const toolbar = h(
+    'footer',
+    { class: 'editor-toolbar' },
+    h('div', { class: 'toolbar-group' }, undoBtn, redoBtn),
+    h('div', { class: 'toolbar-group' }, prevBtn, nextBtn),
   );
-  const grabber = h('div', { class: 'sheet-grabber', 'aria-hidden': 'true' });
 
-  // overview, decks, stage
+  // song headers; their minimap takes their place while a wave is touched
   const deckOut = createDeck('out');
   const deckIn = createDeck('in');
   const restartAfterDrag = () => {
@@ -150,69 +118,112 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   };
   const setOut = (outStart: number) => updateDraft({ outStart });
   const setIn = (inStart: number) => updateDraft({ inStart });
-  const miniOut = createMinimap(setOut, restartAfterDrag);
-  const miniIn = createMinimap(setIn, restartAfterDrag);
-  const overview = h('div', { class: 'overview', 'aria-hidden': 'true' }, miniOut.el, miniIn.el);
+  let minimapTimer: ReturnType<typeof setTimeout> | undefined;
+  const miniOut = createMinimap(setOut, () => {
+    restartAfterDrag();
+    hideMinimapsLater();
+  });
+  const miniIn = createMinimap(setIn, () => {
+    restartAfterDrag();
+    hideMinimapsLater();
+  });
+  const slotOut = h('div', { class: 'deck-slot' }, deckOut.root, miniOut.el);
+  const slotIn = h('div', { class: 'deck-slot' }, deckIn.root, miniIn.el);
 
-  const playBtn = h('button', { class: 'round-btn', type: 'button' }, icon('play'));
-  const stage = createStage(playBtn, setOut, setIn, restartAfterDrag);
+  function showMinimaps() {
+    if (openLane) return;
+    clearTimeout(minimapTimer);
+    slotOut.classList.add('is-mapping');
+    slotIn.classList.add('is-mapping');
+  }
+  function hideMinimaps() {
+    clearTimeout(minimapTimer);
+    slotOut.classList.remove('is-mapping');
+    slotIn.classList.remove('is-mapping');
+  }
+  function hideMinimapsLater() {
+    clearTimeout(minimapTimer);
+    minimapTimer = setTimeout(hideMinimaps, MINIMAP_HIDE_MS);
+  }
+  for (const mini of [miniOut, miniIn]) mini.el.addEventListener('pointerdown', showMinimaps);
+
+  // stage: play between the waves, "− 8 compases ▾ +" on its bottom edge
+  const playBtn = h('button', { class: 'stage-btn stage-play', type: 'button' }, icon('play'));
+  const barsLabel = h('span', {});
+  const barsPill = h('button', { class: 'stage-btn bars-pill', type: 'button', 'aria-haspopup': 'dialog', 'aria-expanded': 'false' }, barsLabel, icon('chevron'));
+  const stage = createStage(
+    playBtn,
+    barsPill,
+    setOut,
+    setIn,
+    () => {
+      endGesture();
+      restartAfterDrag();
+    },
+    beginGesture,
+    cancelGesture,
+  );
+  stage.onWaveTouch((touching) => (touching ? showMinimaps() : hideMinimapsLater()));
   const stageEmptyText = h('p', { class: 'stage-empty-text' });
   const stageEmptyBtn = h('button', { class: 'primary-btn', type: 'button' }, 'Escribir BPM');
   const stageEmpty = h('div', { class: 'stage-empty' }, stageEmptyText, stageEmptyBtn);
 
-  // controls
-  const bars = h('select', { class: 'pill-select', id: 'editor-bars' });
-  for (const b of BARS_OPTIONS) bars.append(h('option', { value: b }, `${b} ${b === 1 ? 'compás' : 'compases'}`));
-
+  // presets in a scrolling row: "Personalizado" only tells, "✦ Auto", then the presets
+  const customPreset = h('button', { class: 'preset', type: 'button', 'aria-pressed': 'false' }, 'Personalizado');
   const presetButtons = new Map<TransitionPreset | 'auto', HTMLButtonElement>();
-  const presets = h('div', { class: 'presets', role: 'group', 'aria-labelledby': 'presets-title' });
+  const presets = h('div', { class: 'presets', role: 'group', 'aria-labelledby': 'presets-title' }, customPreset);
   for (const p of ['auto', ...PRESET_ORDER] as const) {
-    const label = p === 'auto' ? 'Auto' : PRESETS[p].label;
-    const b = h('button', { class: 'preset', type: 'button', 'aria-pressed': 'false' }, label);
+    const b = h('button', { class: 'preset', type: 'button', 'aria-pressed': 'false' }, ...(p === 'auto' ? [icon('sparkle'), 'Auto'] : [PRESETS[p].label]));
     b.addEventListener('click', () => (p === 'auto' ? resetToAuto() : applyPreset(p)));
     presetButtons.set(p, b);
     presets.append(b);
   }
-
-  const rows: Record<EditLane, LaneRow> = {
-    volume: createLaneRow('volume', VOLUME_STYLES.map((v) => [v, VOLUME_LABELS[v]]), (v) => setVolumeStyle(v as VolumeStyle)),
-    eq: createLaneRow('eq', EQ_STYLES.map((v) => [v, EQ_LABELS[v]]), (v) => setEqStyle(v as EqStyle)),
-    filter: createLaneRow('filter', FILTER_STYLES.map((v) => [v, FILTER_LABELS[v]]), (v) => setFilterStyle(v as FilterStyle)),
-    effect: createLaneRow('effect', EFFECT_STYLES.map((v) => [v, EFFECT_LABELS[v]]), (v) => setEffectStyle(v as EffectStyle)),
-  };
-
-  // Looping has no curve, so its row is just the select.
-  const loopSelect = h('select', { class: 'pill-select', id: 'editor-looping' });
-  for (const v of LOOP_STYLES) loopSelect.append(h('option', { value: v }, LOOP_LABELS[v]));
-  loopSelect.addEventListener('change', () => setLoopStyle(loopSelect.value as LoopStyle));
-
-  const settings = h(
-    'div',
-    { class: 'settings-card' },
-    settingRow('editor-bars', 'Duración', bars),
-    rows.volume.el,
-    rows.eq.el,
-    rows.filter.el,
-    rows.effect.el,
-    settingRow('editor-looping', 'Looping', loopSelect, undefined, 'looping'),
+  const presetsSection = h(
+    'section',
+    { class: 'presets-section', 'aria-labelledby': 'presets-title' },
+    h('h3', { class: 'divider-title', id: 'presets-title' }, 'Presets'),
+    presets,
   );
 
-  // "Personalizar" mode: what is being edited, how, and the way out, right under the waveforms
-  const editTitle = h('p', { class: 'edit-title' });
-  const resetBtn = h('button', { class: 'pill-btn', type: 'button' }, 'Restablecer curva');
-  const doneBtn = h('button', { class: 'save-btn', type: 'button' }, 'Listo');
-  const editBar = h(
-    'div',
-    { class: 'edit-bar', hidden: true },
-    h('span', { class: 'edit-dot', 'aria-hidden': 'true' }),
-    h(
-      'div',
-      { class: 'edit-info' },
-      editTitle,
-      h('p', { class: 'edit-hint' }, 'Arrastra los puntos. Doble toque para añadir o quitar uno.'),
-    ),
-    h('div', { class: 'edit-actions' }, resetBtn, doneBtn),
-  );
+  // lane rows: each one opens its sheet
+  const rows = new Map<SheetLane, { el: HTMLButtonElement; value: HTMLElement }>();
+  const laneRows = h('div', { class: 'lane-rows' });
+  for (const lane of SHEET_LANES) {
+    const value = h('span', { class: 'lane-row-value' });
+    const el = h(
+      'button',
+      { class: 'lane-row', type: 'button', 'data-lane': lane, 'aria-haspopup': 'dialog' },
+      h('span', { class: 'lane-bar', 'aria-hidden': 'true' }),
+      h('span', { class: 'lane-row-name' }, SHEET_LANE_NAMES[lane]),
+      value,
+      icon('chevron'),
+    );
+    el.addEventListener('click', () => enterSheetMode(lane));
+    rows.set(lane, { el, value });
+    laneRows.append(el);
+  }
+
+  const barsSheet = createBarsSheet((bars: BarsOption) => updateDraft({ bars }));
+  const laneSheets = createLaneSheets({
+    pick(lane, value) {
+      if (lane === 'volume') setVolumeStyle(value as VolumeStyle);
+      else if (lane === 'eq') setEqStyle(value as EqStyle);
+      else if (lane === 'filter') setFilterStyle(value as FilterStyle);
+      else if (lane === 'effect') setEffectStyle(value as EffectStyle);
+      else setLoopStyle(value as LoopStyle);
+    },
+    toggleCustomize,
+    undo,
+    redo,
+    laneChanged(lane) {
+      openLane = lane;
+      stage.setFocusLane(lane);
+      // Personalizar belongs to the card it started from
+      const editing = state?.editor?.customizing;
+      if (editing && editing !== lane) toggleCustomize(editing);
+    },
+    requestClose: () => void exitSheetMode(),
+  });
 
   const issues = h('ul', { class: 'issues', 'aria-live': 'polite' });
 
@@ -231,6 +242,7 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
 
   const popover = createBpmPopover();
 
+  let sheetsModel: Parameters<typeof laneSheets.update>[0] | null = null;
   const curveEditor = createCurveEditor(stage, {
     onChange: (side, curve) => {
       const lane = state?.editor?.customizing;
@@ -243,38 +255,87 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
     },
     onLimit: () => {
       limitShown = true;
-      renderIssues();
+      if (sheetsModel) laneSheets.update((sheetsModel = { ...sheetsModel, limitShown }));
     },
   });
 
   const body = h(
     'div',
     { class: 'editor-body' },
-    overview,
-    deckOut.root,
+    slotOut,
     stage.el,
     stageEmpty,
-    deckIn.root,
-    editBar,
+    slotIn,
     issues,
-    h('section', { class: 'editor-section', 'aria-labelledby': 'presets-title' }, h('h3', { class: 'section-title', id: 'presets-title' }, 'Preset'), presets),
-    h('section', { class: 'editor-section', 'aria-labelledby': 'settings-title' }, h('h3', { class: 'section-title', id: 'settings-title' }, 'Ajustes'), settings),
+    presetsSection,
+    laneRows,
+    laneSheets.el,
   );
   dialog.setAttribute('aria-labelledby', 'editor-title');
   const backdrop = h('div', { class: 'sheet-backdrop' });
-  const panel = h('div', { class: 'sheet-panel' }, grabber, bar, body, popover.el, confirm);
+  const panel = h('div', { class: 'sheet-panel' }, bar, body, toolbar, barsSheet.el, popover.el, confirm);
   dialog.append(backdrop, panel);
-  pressFeedback([...panel.querySelectorAll('button:not(.nudge)')]);
+  // list rows light up instead of shrinking, like iOS
+  pressFeedback([...panel.querySelectorAll('button:not(.nudge):not(.lane-option):not(.lane-row)')]);
 
   const sheet = createSheet(dialog, {
     panel,
     backdrop,
     body,
-    handles: [grabber, bar],
+    handles: [bar],
     isDirty: () => !!state?.editor?.dirty,
     onDragClose: () => closeEditor(),
     onDragConfirm: () => askConfirm({ kind: 'close' }),
   });
+
+  // ---------- sheet mode: a lane sheet open, the stage on top ----------
+
+  /** The stage jumps to its new place; it slides there from where it was. */
+  function slideStageFrom(before: number) {
+    const dy = before - stage.el.getBoundingClientRect().top;
+    if (Math.abs(dy) < 1) return;
+    if (prefersReducedMotion()) animate(stage.el, { opacity: [0.4, 1] }, FADE);
+    else animate(stage.el, { y: [dy, 0] }, SPRING.sheetOpen);
+  }
+
+  function enterSheetMode(lane: SheetLane) {
+    if (openLane || !state?.editor) return;
+    barsSheet.close();
+    popover.close();
+    hideMinimaps();
+    const before = stage.el.getBoundingClientRect().top;
+    openLane = lane;
+    panel.classList.add('is-sheet-mode');
+    body.scrollTop = 0;
+    stage.setFocusLane(lane);
+    laneSheets.open(lane);
+    slideStageFrom(before);
+  }
+
+  async function exitSheetMode() {
+    if (!openLane) return;
+    const editing = state?.editor?.customizing;
+    if (editing) toggleCustomize(editing);
+    await laneSheets.close();
+    if (!openLane) return;
+    const lane = laneSheets.current();
+    const before = stage.el.getBoundingClientRect().top;
+    openLane = null;
+    panel.classList.remove('is-sheet-mode');
+    stage.setFocusLane(null);
+    slideStageFrom(before);
+    rows.get(lane)?.el.focus({ preventScroll: true });
+  }
+
+  /** Back to the plain editor at once (the editor closed). */
+  function resetSheets() {
+    openLane = null;
+    laneSheets.hide();
+    barsSheet.hide();
+    panel.classList.remove('is-sheet-mode');
+    stage.setFocusLane(null);
+    hideMinimaps();
+  }
 
   let sliding = false;
   /** Pair the slide in flight will land on; taps during the slide move it further. */
@@ -350,6 +411,7 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   redoBtn.addEventListener('click', redo);
   prevBtn.addEventListener('click', () => requestPair(currentPair() - 1));
   nextBtn.addEventListener('click', () => requestPair(currentPair() + 1));
+  barsPill.addEventListener('click', () => (barsSheet.isOpen() ? barsSheet.close() : barsSheet.open(barsPill)));
   keepBtn.addEventListener('click', () => hideConfirm(() => title.focus()));
   // a tap on the dimmed area is "Seguir editando", like an iOS action sheet
   confirm.addEventListener('click', (e) => {
@@ -366,14 +428,6 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
     hideConfirm();
     if (target.kind === 'navigate') navigate(target.pairIndex, true);
   });
-  resetBtn.addEventListener('click', () => {
-    const lane = state?.editor?.customizing;
-    if (lane) resetCurve(lane);
-  });
-  doneBtn.addEventListener('click', () => {
-    const lane = state?.editor?.customizing;
-    if (lane) toggleCustomize(lane);
-  });
   stageEmptyBtn.addEventListener('click', () => {
     const missing = [deckOut, deckIn].find((d) => d.bpm.classList.contains('is-missing'));
     const id = missing?.bpm.dataset.track;
@@ -382,7 +436,7 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   // the popover is anchored to a BPM that scrolls with the body
   body.addEventListener('scroll', () => popover.close(), { passive: true });
 
-  // Shortcuts: undo/redo and [ ] between pairs. Never while typing in a field.
+  // Shortcuts: undo/redo, [ ] between pairs and - + = for zoom. Never while typing in a field.
   dialog.addEventListener('keydown', (e) => {
     const target = e.target as HTMLElement;
     if (target.closest('input, select, textarea') || !confirm.hidden || !state?.editor) return;
@@ -390,10 +444,14 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
     if (mod && e.key.toLowerCase() === 'z') {
       if (e.shiftKey) redo();
       else undo();
-    } else if (!mod && e.key === '[') {
+    } else if (!mod && !openLane && e.key === '[') {
       requestPair(currentPair() - 1);
-    } else if (!mod && e.key === ']') {
+    } else if (!mod && !openLane && e.key === ']') {
       requestPair(currentPair() + 1);
+    } else if (!mod && e.key === '-') {
+      stage.stepZoom(-1);
+    } else if (!mod && (e.key === '+' || e.key === '=')) {
+      stage.stepZoom(1);
     } else {
       return;
     }
@@ -403,20 +461,27 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   function renderIssues() {
     if (!validation) return;
     const item = (kind: 'error' | 'warning', text: string) => h('li', { class: `issue issue--${kind}` }, icon('warning'), h('span', {}, text));
-    issues.replaceChildren(
-      ...validation.errors.map((e) => item('error', e.message)),
-      ...validation.warnings.map((w) => item('warning', w.message)),
-      ...(limitShown ? [item('warning', 'Máximo 32 puntos por curva')] : []),
-    );
+    issues.replaceChildren(...validation.errors.map((e) => item('error', e.message)), ...validation.warnings.map((w) => item('warning', w.message)));
   }
+  /** Focus when Esc / Back arrived, given back if the browser closed the dialog anyway. */
+  let focusBeforeCancel: HTMLElement | null = null;
+  // Chrome lets a page refuse Esc / Back only once per user activation; otherwise the dialog closes on
+  // its own while the editor is still open. Put it back: the cancel handler already did what Esc means.
+  dialog.addEventListener('close', () => {
+    if (!state?.editor || sheet.isClosing()) return;
+    dialog.showModal();
+    if (focusBeforeCancel?.isConnected) focusBeforeCancel.focus({ preventScroll: true });
+  });
   dialog.addEventListener('cancel', (e) => {
     e.preventDefault();
+    focusBeforeCancel = document.activeElement as HTMLElement | null;
     if (popover.isOpen()) popover.close();
     else if (!confirm.hidden) hideConfirm(() => title.focus());
+    else if (barsSheet.isOpen()) barsSheet.close();
+    else if (openLane) void exitSheetMode();
     else requestClose();
   });
 
-  bars.addEventListener('change', () => updateDraft({ bars: Number(bars.value) as BarsOption }));
   playBtn.addEventListener('click', () => (state?.playback === 'previewing' ? handlers.onStop() : handlers.onPreview()));
   for (const deck of [deckOut, deckIn]) {
     deck.bpm.addEventListener('click', () => {
@@ -453,6 +518,7 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
           // Audio and focus changes update state; run them after this render finishes.
           if (next.playback === 'previewing') queueMicrotask(handlers.onStop);
           void sheet.close().then((closed) => {
+            if (closed) resetSheets();
             if (closed && pair !== null) handlers.onClosed(pair);
           });
         }
@@ -462,12 +528,14 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
 
       const justOpened = !dialog.open || sheet.isClosing();
       if (justOpened) {
+        resetSheets();
         sheet.open();
         body.scrollTop = 0;
       }
       // Opening the editor or moving to another pair both start the preview of the new pair.
       const pairChanged = justOpened || openPair !== editor.pairIndex;
       openPair = editor.pairIndex;
+      if (pairChanged) stage.resetZoom();
 
       const { tracks, pairs, validations } = pairsWithDraft(next);
       const from = tracks[editor.pairIndex];
@@ -477,39 +545,29 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
       incomingId = to.id;
       pairCount = pairs.length;
 
-      title.textContent = `Transición ${editor.pairIndex + 1} de ${pairs.length}`;
-      saveBtn.disabled = false;
+      title.textContent = `${editor.pairIndex + 1} de ${pairs.length}`;
+      title.setAttribute('aria-label', `Transición ${editor.pairIndex + 1} de ${pairs.length}`);
       prevBtn.disabled = editor.pairIndex === 0;
       nextBtn.disabled = editor.pairIndex >= pairs.length - 1;
       undoBtn.disabled = editor.past.length === 0;
       redoBtn.disabled = editor.future.length === 0;
 
-      // presets: Auto, the matching preset, or none when Custom
+      // presets: "Personalizado" when nothing matches, Auto, or the matching preset
       const label = chipLabel(t);
+      customPreset.setAttribute('aria-pressed', String(label === 'Custom'));
+      customPreset.disabled = label !== 'Custom';
       for (const [p, b] of presetButtons) {
         const active = p === 'auto' ? label === 'Auto' : label === PRESETS[p].label;
         b.setAttribute('aria-pressed', String(active));
       }
-      bars.value = String(t.bars);
-      const styles: Record<EditLane, string> = { volume: t.volume, eq: t.eq, filter: t.filter, effect: t.effect };
-      const customs: Record<EditLane, unknown> = { volume: t.customVolume, eq: t.customEq, filter: t.customFilter, effect: t.customEffect };
-      for (const lane of EDIT_LANES) {
-        const row = rows[lane];
-        const custom = customs[lane] !== null;
-        const editing = editor.customizing === lane;
-        row.select.value = custom ? 'custom' : styles[lane];
-        row.customOption.hidden = !custom;
-        row.customizeBtn.textContent = editing ? 'Listo' : 'Personalizar';
-        row.customizeBtn.setAttribute('aria-pressed', String(editing));
-        row.el.classList.toggle('is-editing', editing);
+      barsLabel.textContent = barsText(t.bars);
+      barsPill.setAttribute('aria-label', `Duración: ${barsText(t.bars)}`);
+      barsSheet.update(t.bars);
+      for (const [lane, row] of rows) {
+        const value = laneValueLabel(t, lane);
+        row.value.textContent = value;
+        row.el.setAttribute('aria-label', `${SHEET_LANE_NAMES[lane]}: ${value}`);
       }
-      const editing = editor.customizing;
-      if (editing) {
-        editTitle.textContent = `Editando ${LANE_NAMES[editing]}`;
-        editBar.dataset.lane = editing;
-        resetBtn.disabled = customs[editing] === null;
-      }
-      loopSelect.value = t.looping;
 
       const previewing = next.playback === 'previewing';
       if (!previewing) stage.setPlayhead(null);
@@ -518,7 +576,7 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
       playBtn.setAttribute('aria-label', previewing ? 'Detener' : 'Reproducir transición');
       playBtn.title = playBtn.getAttribute('aria-label')!;
 
-      const drawable = from.bpm !== null && to.bpm !== null && from.peaks && to.peaks;
+      drawable = !!(from.bpm !== null && to.bpm !== null && from.finePeaks && to.finePeaks && from.peaks && to.peaks);
       if (!drawable) {
         fillDeck(deckOut, from, '');
         fillDeck(deckIn, to, '');
@@ -526,9 +584,8 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         stageEmptyText.textContent = `Toca el BPM de ${missing.join(' y ')} para escribirlo y ver la transición.`;
         stageEmptyBtn.hidden = missing.length === 0;
         stageEmpty.hidden = false;
-        editBar.hidden = true;
         stage.el.hidden = true;
-        overview.hidden = true;
+        hideMinimaps();
         stage.draw(null);
         curveEditor.update(null, false);
       } else {
@@ -539,24 +596,15 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         fillDeck(deckIn, to, `Entra en ${formatTime(t.inStart)}, a ${r.toFixed(3)}× durante la transición`);
         stageEmpty.hidden = true;
         stage.el.hidden = false;
-        overview.hidden = false;
-        const stageFrom = { name: from.name, peaks: from.peaks!, duration: from.duration, bpm: from.bpm!, firstBeatOffset: from.firstBeatOffset };
-        const stageTo = { name: to.name, peaks: to.peaks!, duration: to.duration, bpm: to.bpm!, firstBeatOffset: to.firstBeatOffset };
+        const stageFrom = { name: from.name, peaks: from.finePeaks!, duration: from.duration, bpm: from.bpm!, firstBeatOffset: from.firstBeatOffset };
+        const stageTo = { name: to.name, peaks: to.finePeaks!, duration: to.duration, bpm: to.bpm!, firstBeatOffset: to.firstBeatOffset };
         const jumps = loopJumps(t, from.bpm!);
         const loop = jumps.length > 0 ? { audioStart: t.outStart, jumps } : null;
         stage.draw({ from: stageFrom, to: stageTo, outStart: t.outStart, inStart: t.inStart, d, r, linesOut: lines.out, linesIn: lines.in, loop });
-        miniOut.draw({ ...stageFrom, windowStart: t.outStart, windowLength: d });
-        miniIn.draw({ ...stageTo, windowStart: t.inStart, windowLength: d * r });
+        miniOut.draw({ ...stageFrom, peaks: from.peaks!, windowStart: t.outStart, windowLength: d });
+        miniIn.draw({ ...stageTo, peaks: to.peaks!, windowStart: t.inStart, windowLength: d * r });
         stage.setCustomizing(editor.customizing);
-        overview.classList.toggle('is-locked', editor.customizing !== null);
-        const showEdit = editor.customizing !== null;
-        if (showEdit && editBar.hidden) {
-          editBar.hidden = false;
-          if (prefersReducedMotion()) animate(editBar, { opacity: [0, 1] }, FADE);
-          else animate(editBar, { opacity: [0, 1], y: [-8, 0] }, SPRING.rowEnter);
-        } else if (!showEdit) {
-          editBar.hidden = true;
-        }
+        stage.setFocusLane(openLane);
         const lane = editor.customizing ?? 'volume';
         const shape = filterShape(t.filter);
         const scales = {
@@ -572,6 +620,15 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
       lastSignature = signature;
       if (changed) limitShown = false;
       renderIssues();
+      sheetsModel = {
+        draft: t,
+        customizing: editor.customizing,
+        canUndo: editor.past.length > 0,
+        canRedo: editor.future.length > 0,
+        limitShown,
+        canCustomize: drawable,
+      };
+      laneSheets.update(sheetsModel);
       const dragging = stage.isDragging() || miniOut.isDragging() || miniIn.isDragging() || curveEditor.isDragging();
       if (pairChanged) {
         // An invalid pair never autoplays; when moving between pairs, the previous preview stops.

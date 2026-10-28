@@ -183,15 +183,28 @@ function normalize(s: AppState): AppState {
 
 const HISTORY_LIMIT = 100;
 
-/** While a pointer gesture is open, only its first change is recorded in the undo history. */
-let gesture: { open: boolean; recorded: boolean } = { open: false, recorded: false };
+type GestureStart = Pick<EditorState, 'draft' | 'past' | 'future'>;
+
+/**
+ * While a pointer gesture is open, only its first change is recorded in the undo history. `start` is the
+ * editor as the gesture found it, so cancelGesture can put it back.
+ */
+let gesture: { open: boolean; recorded: boolean; start: GestureStart | null } = { open: false, recorded: false, start: null };
 
 export function beginGesture(): void {
-  gesture = { open: true, recorded: false };
+  const e = state.editor;
+  gesture = { open: true, recorded: false, start: e ? { draft: e.draft, past: e.past, future: e.future } : null };
 }
 
 export function endGesture(): void {
-  gesture = { open: false, recorded: false };
+  gesture = { open: false, recorded: false, start: null };
+}
+
+/** Ends the open gesture undoing it: draft, past and future go back to how they were at beginGesture. */
+export function cancelGesture(): void {
+  const start = gesture.start;
+  endGesture();
+  if (start) setState((s) => (s.editor ? { editor: { ...s.editor, ...start } } : {}));
 }
 
 function freshEditor(pairIndex: number, saved: Transition, customizing: EditLane | null): EditorState {

@@ -2,14 +2,14 @@ import { GESTURE_SLOP, rubberBand, sheetReleaseAction } from '../lib/gestures';
 import { FADE, SPRING, animate, createVelocityTracker, currentTranslate, prefersReducedMotion, resetTransform, springAxis, type Animation } from './motion';
 
 /** Where a downward drag in the body never moves the sheet: editing surfaces and fields. */
-const NO_DRAG = '.stage-view, .overview, .minimap, .lane-hit, .curve-editor, .curve-point, .curve-handle, select, input, .popover, .confirm';
+const NO_DRAG = '.stage-view, .minimap, .lane-hit, .curve-editor, .curve-point, .curve-handle, .lane-sheets, .bars-sheet, .presets, select, input, .popover, .confirm';
 
 export interface SheetOptions {
   panel: HTMLElement;
   backdrop: HTMLElement;
   /** Scrollable content; a drag from it moves the sheet only while scrolled to the top. */
   body: HTMLElement;
-  /** Grabber and title bar: a vertical drag from them always moves the sheet. */
+  /** Title bar: a vertical drag from it always moves the sheet. */
   handles: HTMLElement[];
   isDirty(): boolean;
   /** The drag asked to close and nothing is unsaved: the owner closes (and calls close()). */

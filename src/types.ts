@@ -69,7 +69,10 @@ export interface Track {
   duration: number;
   bpm: number | null;
   firstBeatOffset: number;
+  /** 2000 bins over the whole song: minimaps. */
   peaks: Float32Array | null;
+  /** One bin every 5 ms: the aligned view of the editor. */
+  finePeaks: Float32Array | null;
   status: TrackStatus;
   error?: string;
 }
