@@ -26,6 +26,11 @@ const ICONS = {
   add: '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
   undo: '<path d="M9 7L5 11l4 4M5 11h9a5 5 0 010 10h-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
   redo: '<path d="M15 7l4 4-4 4M19 11h-9a5 5 0 000 10h2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  grip: '<path d="M5 8h14M5 12h14M5 16h14" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>',
+  transition: '<path d="M4 7c6 0 10 10 16 10M4 17c6 0 10-10 16-10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>',
+  warning: '<path d="M12 4.5l8.5 15h-17z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" fill="none"/><path d="M12 10v4.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><circle cx="12" cy="17" r="1.1"/>',
+  chevron: '<path d="M10 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  music: '<path d="M9 18.5a2.5 2.5 0 11-2.5-2.5H9V6l10-2v12.5a2.5 2.5 0 11-2.5-2.5H19" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" fill="none"/>',
 };
 
 export type IconName = keyof typeof ICONS;

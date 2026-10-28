@@ -1,7 +1,9 @@
 import type { AppState, Track } from '../types';
 import { derive, setMixEnabled, setState } from '../state';
 import { chipLabel } from '../lib/curves';
-import { formatBpm, formatDuration, h, icon } from './dom';
+import { formatBpm, formatDuration, h, icon, setIcon } from './dom';
+import { FADE, SPRING, animate, prefersReducedMotion, pressFeedback } from './motion';
+import { animateY, attachRowGestures, liftRow, stopY } from './rowGestures';
 
 const STATUS_LABELS: Partial<Record<Track['status'], string>> = {
   decoding: 'Leyendo archivo…',
@@ -17,6 +19,8 @@ export interface PlaylistView {
 
 interface Row {
   root: HTMLLIElement;
+  swipe: HTMLElement;
+  content: HTMLElement;
   index: HTMLElement;
   name: HTMLElement;
   meta: HTMLElement;
@@ -26,8 +30,11 @@ interface Row {
   up: HTMLButtonElement;
   down: HTMLButtonElement;
   remove: HTMLButtonElement;
+  hoverRemove: HTMLButtonElement;
+  errorRemove: HTMLButtonElement;
   chipSlot: HTMLElement;
   chip: HTMLButtonElement;
+  chipText: HTMLElement;
 }
 
 function move(id: string, delta: number) {
@@ -41,36 +48,71 @@ function move(id: string, delta: number) {
   });
 }
 
+function moveTo(id: string, to: number) {
+  setState((s) => {
+    const tracks = [...s.tracks];
+    const i = tracks.findIndex((t) => t.id === id);
+    if (i < 0 || i === to) return {};
+    const [track] = tracks.splice(i, 1);
+    tracks.splice(to, 0, track);
+    return { tracks };
+  });
+}
+
+/** Fixed bars over the list's edges: the reorder drag scrolls the page when it gets near them. */
+const EDGES = {
+  top: () => document.getElementById('navbar')?.getBoundingClientRect().bottom ?? 0,
+  bottom: () => document.getElementById('transport')?.offsetHeight ?? 0,
+};
+
 export function mountPlaylist(
   actions: HTMLElement,
   root: HTMLElement,
   onFiles: (files: File[]) => void,
   onOpenEditor: (pairIndex: number) => void,
+  onRemove: (id: string) => void,
 ): PlaylistView {
   const rows = new Map<string, Row>();
+  let rendered = false;
+  let lastLayout = '';
 
   // header actions: Mix toggle + add songs
   const mixSwitch = h('button', { class: 'switch', type: 'button', role: 'switch', 'aria-checked': 'true', 'aria-label': 'Mix' });
   const mix = h('div', { class: 'mix-toggle' }, h('span', { class: 'mix-label', 'aria-hidden': 'true' }, 'Mix'), mixSwitch);
-  const input = h('input', { type: 'file', accept: 'audio/*', multiple: true, class: 'visually-hidden', id: 'file-input' });
-  const addBtn = h('label', { class: 'pill-btn', for: 'file-input' }, icon('add'), 'Añadir canciones');
+  // iOS Safari treats accept="audio/*" as video and hides MP3/WAV in Files: list the extensions instead
+  const input = h('input', {
+    type: 'file',
+    accept: '.mp3,.wav,audio/mpeg,audio/wav,audio/x-wav',
+    multiple: true,
+    class: 'visually-hidden',
+    id: 'file-input',
+    tabindex: -1,
+  });
+  const addBtn = h('button', { class: 'add-btn', type: 'button', 'aria-label': 'Añadir canciones', title: 'Añadir canciones' }, icon('add'));
   actions.append(mix, input, addBtn);
 
   const list = h('ol', { class: 'playlist' });
+  const emptyAdd = h('button', { class: 'primary-btn empty-add', type: 'button' }, icon('add'), 'Añadir canciones');
   const empty = h(
     'div',
     { class: 'playlist-empty' },
-    h('p', { class: 'playlist-empty-title' }, 'Arrastra tus canciones aquí'),
-    h('p', { class: 'playlist-empty-detail' }, 'MP3 o WAV desde tu equipo. Entre cada canción y la siguiente aparece una transición que puedes editar.'),
+    h('span', { class: 'playlist-empty-icon', 'aria-hidden': 'true' }, icon('music')),
+    h('p', { class: 'playlist-empty-title' }, 'Sin canciones'),
+    h('p', { class: 'playlist-empty-detail' }, 'Elige MP3 o WAV desde Archivos. Entre cada canción y la siguiente aparece una transición que puedes editar.'),
+    emptyAdd,
   );
   root.append(list, empty);
+  pressFeedback([addBtn, emptyAdd]);
 
   mixSwitch.addEventListener('click', () => setMixEnabled(mixSwitch.getAttribute('aria-checked') !== 'true'));
+  addBtn.addEventListener('click', () => input.click());
+  emptyAdd.addEventListener('click', () => input.click());
   input.addEventListener('change', () => {
     if (input.files?.length) onFiles([...input.files]);
     input.value = '';
   });
 
+  // desktop: drop files anywhere on the page
   let dragDepth = 0;
   const dropZone = document.body;
   dropZone.addEventListener('dragenter', (e) => {
@@ -93,6 +135,20 @@ export function mountPlaylist(
     if (files.length) onFiles(files);
   });
 
+  /** Rows in list order, without the ones animating out. */
+  function liveItems(): Row[] {
+    return [...list.children].filter((li) => !li.classList.contains('is-exiting')).map((li) => rows.get((li as HTMLElement).dataset.id!)!);
+  }
+
+  /** Removes a track and keeps keyboard focus in the list. */
+  function removeFocused(id: string) {
+    const items = liveItems();
+    const i = items.findIndex((r) => r.root.dataset.id === id);
+    const next = items[i + 1] ?? items[i - 1];
+    onRemove(id);
+    (next?.content ?? addBtn).focus();
+  }
+
   function createRow(id: string): Row {
     const index = h('span', { class: 'row-index', 'aria-hidden': 'true' });
     const name = h('p', { class: 'row-name' });
@@ -100,32 +156,79 @@ export function mountPlaylist(
     const error = h('p', { class: 'row-error' });
     const bpm = h('span', { class: 'row-bpm' });
     const duration = h('span', { class: 'row-duration' });
-    const up = h('button', { class: 'icon-btn', type: 'button' }, icon('up'));
-    const down = h('button', { class: 'icon-btn', type: 'button' }, icon('down'));
-    const remove = h('button', { class: 'icon-btn', type: 'button' }, icon('remove'));
-    const chip = h('button', { class: 'chip', type: 'button' });
+    // screen readers can't swipe or long-press: they keep plain buttons
+    const up = h('button', { type: 'button', tabindex: -1 }, 'Subir');
+    const down = h('button', { type: 'button', tabindex: -1 }, 'Bajar');
+    const remove = h('button', { type: 'button', tabindex: -1 }, 'Quitar');
+    const hoverRemove = h('button', { class: 'row-remove', type: 'button', tabindex: -1, 'aria-hidden': 'true' }, icon('remove'));
+    // a file that can't be read has nothing else to do: offer the way out in place
+    const errorRemove = h('button', { class: 'text-btn row-error-remove', type: 'button' }, 'Quitar');
+    const handle = h('span', { class: 'row-handle', 'aria-hidden': 'true' }, icon('grip'));
+    const chipText = h('span', { class: 'chip-text' });
+    const chip = h('button', { class: 'chip', type: 'button' }, icon('transition'), chipText);
     const chipSlot = h('div', { class: 'chip-slot' }, chip);
 
-    const row = h(
+    const content = h(
       'div',
-      { class: 'row' },
+      { class: 'row', tabindex: 0, 'aria-keyshortcuts': 'Alt+ArrowUp Alt+ArrowDown Delete' },
       index,
       h('div', { class: 'row-main' }, name, meta, error),
       bpm,
       duration,
-      h('div', { class: 'row-actions' }, up, down, remove),
+      errorRemove,
+      hoverRemove,
+      handle,
+      h('span', { class: 'visually-hidden' }, up, down, remove),
     );
-    const root = h('li', { class: 'playlist-item' }, row, chipSlot);
+    const deleteBtn = h('button', { class: 'row-delete', type: 'button' }, 'Eliminar');
+    const swipe = h('div', { class: 'row-swipe' }, deleteBtn, content);
+    const li = h('li', { class: 'playlist-item' }, swipe, chipSlot);
+    li.dataset.id = id;
+    pressFeedback(chip);
 
     up.addEventListener('click', () => move(id, -1));
     down.addEventListener('click', () => move(id, 1));
-    remove.addEventListener('click', () => setState((s) => ({ tracks: s.tracks.filter((t) => t.id !== id) })));
+    remove.addEventListener('click', () => onRemove(id));
+    hoverRemove.addEventListener('click', () => onRemove(id));
+    errorRemove.addEventListener('click', () => removeFocused(id));
+    content.addEventListener('keydown', (e) => {
+      if (e.target !== content) return;
+      if (e.altKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        move(id, e.key === 'ArrowUp' ? -1 : 1);
+        content.focus();
+      } else if (!e.altKey && !e.metaKey && !e.ctrlKey && (e.key === 'Delete' || e.key === 'Backspace')) {
+        removeFocused(id);
+      } else {
+        return;
+      }
+      e.preventDefault();
+    });
     chip.addEventListener('click', () => {
       const pairIndex = Number(chip.dataset.pair);
       if (!Number.isNaN(pairIndex)) onOpenEditor(pairIndex);
     });
 
-    return { root, index, name, meta, bpm, duration, error, up, down, remove, chipSlot, chip };
+    attachRowGestures({
+      root: li,
+      content,
+      deleteBtn,
+      handle,
+      onDelete: () => onRemove(id),
+      onLift: (start) => {
+        const items = liveItems();
+        const from = items.findIndex((r) => r.root === li);
+        if (from < 0) return;
+        liftRow(
+          items.map((r) => ({ root: r.root, visual: r.swipe })),
+          from,
+          start,
+          EDGES,
+          (to) => moveTo(id, to),
+        );
+      },
+    });
+
+    return { root: li, swipe, content, index, name, meta, bpm, duration, error, up, down, remove, hoverRemove, errorRemove, chipSlot, chip, chipText };
   }
 
   function fill(row: Row, track: Track, i: number, total: number) {
@@ -134,8 +237,11 @@ export function mountPlaylist(
     row.name.title = track.name;
     row.root.dataset.status = track.status;
     const label = track.status === 'ready' ? '' : STATUS_LABELS[track.status] ?? '';
-    row.meta.textContent = label;
+    const busy = track.status === 'decoding' || track.status === 'analyzing';
+    row.meta.replaceChildren(...(busy ? [h('span', { class: 'spinner', 'aria-hidden': 'true' })] : []), label);
     row.meta.hidden = !label;
+    row.errorRemove.hidden = track.status !== 'error';
+    row.errorRemove.setAttribute('aria-label', `Quitar ${track.name}`);
     row.error.textContent = track.status === 'error' ? track.error ?? '' : '';
     row.error.hidden = track.status !== 'error';
     row.bpm.textContent = track.bpm !== null ? `${formatBpm(track.bpm)} bpm` : '';
@@ -145,20 +251,47 @@ export function mountPlaylist(
     row.up.setAttribute('aria-label', `Subir ${track.name}`);
     row.down.setAttribute('aria-label', `Bajar ${track.name}`);
     row.remove.setAttribute('aria-label', `Quitar ${track.name}`);
+    row.content.setAttribute('aria-label', `${i + 1}. ${track.name}${label ? `, ${label}` : ''}`);
+  }
+
+  function exit(row: Row) {
+    const li = row.root;
+    li.classList.add('is-exiting');
+    stopY(li);
+    if (prefersReducedMotion()) {
+      void animate(li, { opacity: 0 }, FADE).then(() => li.remove());
+      return;
+    }
+    li.style.height = `${li.offsetHeight}px`;
+    void animate(li, { height: 0, opacity: 0 }, { duration: 250, ease: 'easeOut' }).then(() => li.remove());
+  }
+
+  function enter(row: Row) {
+    if (prefersReducedMotion()) animate(row.root, { opacity: [0, 1] }, FADE);
+    else animate(row.root, { opacity: [0, 1], y: [8, 0] }, SPRING.rowEnter);
   }
 
   return {
     update(state) {
       const { tracks: queue, pairs, validations } = derive(state);
       const tracks = state.tracks;
-      const seen = new Set<string>();
 
+      // FLIP only when the rows' order or height can have changed (not on every draft edit)
+      const layout = JSON.stringify([tracks.map((t) => t.id), state.mixEnabled, tracks.map((t) => t.status)]);
+      const relayout = rendered && layout !== lastLayout && !prefersReducedMotion();
+      lastLayout = layout;
+      const before = new Map<HTMLElement, number>();
+      if (relayout) for (const r of liveItems()) before.set(r.root, r.root.getBoundingClientRect().top);
+
+      const seen = new Set<string>();
+      const created: Row[] = [];
       tracks.forEach((track, i) => {
         seen.add(track.id);
         let row = rows.get(track.id);
         if (!row) {
           row = createRow(track.id);
           rows.set(track.id, row);
+          created.push(row);
         }
         fill(row, track, i, tracks.length);
 
@@ -171,25 +304,49 @@ export function mountPlaylist(
           const ok = validations[q].ok;
           row.chip.dataset.pair = String(q);
           row.chip.disabled = !pair;
-          row.chip.textContent = !pair ? '…' : ok ? chipLabel(pair.transition) : 'Revisar';
+          row.chipText.textContent = !pair ? '…' : ok ? chipLabel(pair.transition) : 'Revisar';
           row.chip.classList.toggle('chip--error', !!pair && !ok);
+          setIcon(row.chip, !!pair && !ok ? 'warning' : 'transition');
           row.chip.setAttribute(
             'aria-label',
-            `Editar transición de ${queue[q].name} a ${queue[q + 1].name}: ${row.chip.textContent}`,
+            `Editar transición de ${queue[q].name} a ${queue[q + 1].name}: ${row.chipText.textContent}`,
           );
         } else {
           delete row.chip.dataset.pair;
         }
-
-        if (list.children[i] !== row.root) list.insertBefore(row.root, list.children[i] ?? null);
       });
 
       for (const [id, row] of rows) {
         if (!seen.has(id)) {
-          row.root.remove();
           rows.delete(id);
+          exit(row);
         }
       }
+
+      // put the rows in order, stepping over the ones animating out
+      const focused = document.activeElement;
+      let cursor = list.firstElementChild;
+      for (const track of tracks) {
+        const el = rows.get(track.id)!.root;
+        while (cursor && cursor.classList.contains('is-exiting')) cursor = cursor.nextElementSibling;
+        if (cursor === el) {
+          cursor = cursor.nextElementSibling;
+          continue;
+        }
+        list.insertBefore(el, cursor);
+      }
+      if (focused instanceof HTMLElement && focused !== document.activeElement && list.contains(focused)) focused.focus();
+
+      if (relayout) {
+        const moved = [...before.keys()].filter((li) => li.isConnected && !li.classList.contains('is-exiting'));
+        for (const li of moved) stopY(li);
+        for (const li of moved) {
+          const delta = before.get(li)! - li.getBoundingClientRect().top;
+          if (Math.abs(delta) > 1) animateY(li, delta, 0);
+        }
+      }
+      if (rendered) created.forEach(enter);
+      rendered = true;
 
       mixSwitch.setAttribute('aria-checked', String(state.mixEnabled));
       empty.hidden = tracks.length > 0;

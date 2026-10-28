@@ -2,18 +2,21 @@
 <html lang="es">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Mixer</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#121212" />
+    <title>D-Mix</title>
   </head>
   <body>
     <div class="app">
-      <header class="topbar">
-        <div class="topbar-inner">
-          <h1 class="wordmark">mixer</h1>
+      <header class="navbar" id="navbar">
+        <div class="navbar-inner">
+          <p class="navbar-title" aria-hidden="true">D-Mix</p>
           <div class="header-actions" id="header-actions"></div>
         </div>
       </header>
-      <main class="playlist-wrap" id="playlist" aria-label="Playlist"></main>
+      <main class="playlist-wrap" id="playlist" aria-labelledby="large-title">
+        <h1 class="large-title wordmark" id="large-title">D-Mix</h1>
+      </main>
       <footer class="transport" id="transport"></footer>
     </div>
     <dialog class="editor" id="editor"></dialog>
