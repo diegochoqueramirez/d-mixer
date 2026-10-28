@@ -35,10 +35,29 @@ export type FilterStyle =
 /** What a song's filter curve drives: closing a low-pass or a high-pass, or the level of filtered noise. */
 export type FilterKind = 'lowpass' | 'highpass' | 'noise';
 
-/** Lane being edited in "Personalizar". */
-export type EditLane = 'volume' | 'eq' | 'filter';
+export type EffectStyle =
+  | 'reverb-out-center'
+  | 'reverb-cut-end'
+  | 'reverb-out-end'
+  | 'delay-half-cut-end'
+  | 'delay-three-quarter-cut-end'
+  | 'echo-half-cut-end'
+  | 'echo-half-out-end'
+  | 'echo-three-quarter-cut-end'
+  | 'echo-three-quarter-out-end'
+  | 'echo-one-cut-end'
+  | 'echo-one-out-end'
+  | 'none';
 
-export type TransitionPreset = 'fade' | 'blend' | 'rise' | 'wave' | 'melt' | 'slam';
+/** What the effect send feeds: a reverb, an echo that keeps repeating, or a delay that repeats once. */
+export type EffectKind = 'reverb' | 'echo' | 'delay';
+
+export type LoopStyle = 'loop-1' | 'loop-2' | 'loop-4' | 'loop-8' | 'loop-16' | 'loop-halving' | 'none';
+
+/** Lane being edited in "Personalizar". */
+export type EditLane = 'volume' | 'eq' | 'filter' | 'effect';
+
+export type TransitionPreset = 'fade' | 'blend' | 'rise' | 'wave' | 'melt' | 'slam' | 'dissolve' | 'surge' | 'afterglow';
 export type BarsOption = 1 | 2 | 4 | 8 | 16;
 
 export type TrackStatus = 'decoding' | 'analyzing' | 'ready' | 'bpm-required' | 'error';
@@ -106,6 +125,12 @@ export interface Transition {
   customEq: VolumeCurves | null;
   /** Hand-drawn filter closure per song; null = use the `filter` style. */
   customFilter: SideCurves | null;
+  /** Effect on the outgoing song. */
+  effect: EffectStyle;
+  /** Loop of the outgoing song. */
+  looping: LoopStyle;
+  /** Hand-drawn effect send of the outgoing song; null = use the `effect` style. */
+  customEffect: GainCurve | null;
 }
 
 export interface EditorState {
@@ -166,6 +191,26 @@ export interface NoiseEvent {
   frequency: Float32Array;
 }
 
+/** Effect send (0..1) of the outgoing song over a transition window, and how the effect sounds. */
+export interface EffectEvent {
+  time: number;
+  duration: number;
+  kind: EffectKind;
+  /** Seconds between repeats; 0 for reverb. */
+  delay: number;
+  /** 0.55 for echo; 0 for delay and reverb. */
+  feedback: number;
+  send: Float32Array;
+  /** true = rings on after the window ("out"); false = cut at its end ("cut"). */
+  ringsOut: boolean;
+}
+
+/** From each jump's `time`, the outgoing song plays again from `audioStart` for `duration` seconds. */
+export interface LoopEvent {
+  audioStart: number;
+  jumps: { time: number; duration: number }[];
+}
+
 export interface TimelineEntry {
   trackId: string;
   contextStart: number;
@@ -178,6 +223,8 @@ export interface TimelineEntry {
   filterIn?: FilterEvent;
   filterOut?: FilterEvent;
   noiseOut?: NoiseEvent;
+  effectOut?: EffectEvent;
+  loopOut?: LoopEvent;
   stopAt: number;
 }
 
@@ -192,4 +239,4 @@ export const VOLUME_STYLES: VolumeStyle[] = [
   'center-cut',
   'fade-in-fast-out',
 ];
-export const PRESET_ORDER: TransitionPreset[] = ['fade', 'blend', 'rise', 'wave', 'melt', 'slam'];
+export const PRESET_ORDER: TransitionPreset[] = ['fade', 'blend', 'rise', 'wave', 'melt', 'slam', 'dissolve', 'surge', 'afterglow'];

@@ -1,5 +1,6 @@
-import type { AppState, EditLane, EditorState, EqStyle, FilterStyle, GainCurve, SideCurves, Track, Transition, TransitionPreset, VolumeStyle } from './types';
+import type { AppState, EditLane, EditorState, EffectStyle, EqStyle, FilterStyle, GainCurve, LoopStyle, SideCurves, Track, Transition, TransitionPreset, VolumeStyle } from './types';
 import { PRESETS } from './lib/curves';
+import { effectCurve } from './lib/effects';
 import { curveFromStyle } from './lib/gainCurve';
 import { bassCurves, filterCurves } from './lib/lanes';
 import { barsToSeconds, snapToBeat } from './lib/timing';
@@ -84,6 +85,9 @@ export function defaultTransition(from: Track, to: Track): Transition {
     filter: PRESETS.fade.filter,
     customEq: null,
     customFilter: null,
+    effect: PRESETS.fade.effect,
+    looping: PRESETS.fade.looping,
+    customEffect: null,
   };
 }
 
@@ -101,9 +105,12 @@ function sameTransition(a: Transition, b: Transition): boolean {
     a.auto === b.auto &&
     a.eq === b.eq &&
     a.filter === b.filter &&
+    a.effect === b.effect &&
+    a.looping === b.looping &&
     JSON.stringify(a.customVolume) === JSON.stringify(b.customVolume) &&
     JSON.stringify(a.customEq) === JSON.stringify(b.customEq) &&
-    JSON.stringify(a.customFilter) === JSON.stringify(b.customFilter)
+    JSON.stringify(a.customFilter) === JSON.stringify(b.customFilter) &&
+    JSON.stringify(a.customEffect) === JSON.stringify(b.customEffect)
   );
 }
 
@@ -193,14 +200,26 @@ function editDraft(change: (draft: Transition) => Partial<Transition>): void {
   setState((s) => (s.editor ? commitDraft(s, { ...s.editor.draft, ...change(s.editor.draft) }) : {}));
 }
 
-/** Moving points or bars leaves Auto but keeps the preset name if the three lanes still match. */
+/** Moving points or bars leaves Auto but keeps the preset name if the five fields still match. */
 export function updateDraft(patch: Partial<Pick<Transition, 'outStart' | 'inStart' | 'bars'>>): void {
   editDraft(() => ({ ...patch, auto: false }));
 }
 
 export function applyPreset(preset: TransitionPreset): void {
-  const { volume, eq, filter } = PRESETS[preset];
-  editDraft(() => ({ preset, volume, eq, filter, customVolume: null, customEq: null, customFilter: null, auto: false }));
+  const { volume, eq, filter, effect, looping } = PRESETS[preset];
+  editDraft(() => ({
+    preset,
+    volume,
+    eq,
+    filter,
+    effect,
+    looping,
+    customVolume: null,
+    customEq: null,
+    customFilter: null,
+    customEffect: null,
+    auto: false,
+  }));
 }
 
 export function setVolumeStyle(volume: VolumeStyle): void {
@@ -213,6 +232,15 @@ export function setEqStyle(eq: EqStyle): void {
 
 export function setFilterStyle(filter: FilterStyle): void {
   editDraft(() => ({ filter, customFilter: null, auto: false }));
+}
+
+export function setEffectStyle(effect: EffectStyle): void {
+  editDraft(() => ({ effect, customEffect: null, auto: false }));
+}
+
+/** The loop has no curve of its own, so changing it keeps every hand-drawn curve. */
+export function setLoopStyle(looping: LoopStyle): void {
+  editDraft(() => ({ looping, auto: false }));
 }
 
 export function resetToAuto(): void {
@@ -233,6 +261,8 @@ function curvesOfVolume(t: Transition) {
 export function editableCurves(t: Transition, lane: EditLane): SideCurves {
   if (lane === 'eq') return bassCurves(t);
   if (lane === 'filter') return filterCurves(t);
+  // The effect only ever goes on the outgoing song.
+  if (lane === 'effect') return { out: effectCurve(t), in: null };
   return curvesOfVolume(t);
 }
 
@@ -240,11 +270,12 @@ export function updateCustomCurve(lane: EditLane, side: 'out' | 'in', curve: Gai
   editDraft((d) => {
     if (lane === 'eq') return { customEq: { ...bassCurves(d), [side]: curve }, auto: false };
     if (lane === 'filter') return { customFilter: { ...filterCurves(d), [side]: curve }, auto: false };
+    if (lane === 'effect') return side === 'out' ? { customEffect: curve, auto: false } : {};
     return { customVolume: { ...curvesOfVolume(d), [side]: curve }, auto: false };
   });
 }
 
-const CUSTOM_FIELD = { volume: 'customVolume', eq: 'customEq', filter: 'customFilter' } as const;
+const CUSTOM_FIELD = { volume: 'customVolume', eq: 'customEq', filter: 'customFilter', effect: 'customEffect' } as const;
 
 /** Back to the curve of the lane's current style. */
 export function resetCurve(lane: EditLane): void {

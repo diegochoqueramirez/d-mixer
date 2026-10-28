@@ -79,14 +79,17 @@ describe('sampleCurve', () => {
 });
 
 describe('chipLabel', () => {
-  const recipe = (p: keyof typeof PRESETS) => ({ volume: PRESETS[p].volume, eq: PRESETS[p].eq, filter: PRESETS[p].filter });
-  const base = { auto: false, preset: null, customVolume: null, customEq: null, customFilter: null, ...recipe('fade') };
+  const recipe = (p: keyof typeof PRESETS) => {
+    const { volume, eq, filter, effect, looping } = PRESETS[p];
+    return { volume, eq, filter, effect, looping };
+  };
+  const base = { auto: false, preset: null, customVolume: null, customEq: null, customFilter: null, customEffect: null, ...recipe('fade') };
 
   it('says Auto while the transition is automatic', () => {
     expect(chipLabel({ ...base, auto: true, preset: 'fade' })).toBe('Auto');
   });
 
-  it('names the preset when the three lanes follow its recipe', () => {
+  it('names the preset when the five fields follow its recipe', () => {
     for (const p of PRESET_ORDER) expect(chipLabel({ ...base, preset: p, ...recipe(p) })).toBe(PRESETS[p].label);
   });
 
@@ -97,25 +100,36 @@ describe('chipLabel', () => {
     expect(chipLabel({ ...base, preset: null })).toBe('Custom');
   });
 
+  it('says Custom when the effect or the loop differ from the recipe', () => {
+    expect(chipLabel({ ...base, preset: 'fade', effect: 'reverb-out-end' })).toBe('Custom');
+    expect(chipLabel({ ...base, preset: 'surge', ...recipe('surge'), looping: 'loop-8' })).toBe('Custom');
+    expect(chipLabel({ ...base, preset: 'dissolve', ...recipe('dissolve'), effect: 'none' })).toBe('Custom');
+  });
+
   it('says Custom when a curve was drawn by hand, even if the styles match a preset', () => {
     const curves = curveFromStyle('smooth-crossfade');
     expect(chipLabel({ ...base, preset: 'fade', customVolume: curves })).toBe('Custom');
     expect(chipLabel({ ...base, preset: 'fade', customEq: curves })).toBe('Custom');
     expect(chipLabel({ ...base, preset: 'fade', customFilter: curves })).toBe('Custom');
+    expect(chipLabel({ ...base, preset: 'dissolve', ...recipe('dissolve'), customEffect: curves.out })).toBe('Custom');
   });
 });
 
 describe('PRESETS', () => {
-  it('follow the recipes of SPEC 04', () => {
+  it('follow the recipes of SPEC 04 and SPEC 05', () => {
+    const plain = { effect: 'none', looping: 'none' };
     expect(PRESETS).toMatchObject({
-      fade: { volume: 'smooth-crossfade', eq: 'center-bass-swap', filter: 'none' },
-      blend: { volume: 'overlap', eq: 'three-band-fade', filter: 'none' },
-      rise: { volume: 'overlap', eq: 'end-bass-swap', filter: 'lpf-in-hpf-out' },
-      wave: { volume: 'overlap', eq: 'center-bass-swap', filter: 'lpf-in' },
-      melt: { volume: 'crossfade', eq: 'center-bass-swap', filter: 'hpf-in' },
-      slam: { volume: 'center-cut', eq: 'none', filter: 'none' },
+      fade: { volume: 'smooth-crossfade', eq: 'center-bass-swap', filter: 'none', ...plain },
+      blend: { volume: 'overlap', eq: 'three-band-fade', filter: 'none', ...plain },
+      rise: { volume: 'overlap', eq: 'end-bass-swap', filter: 'lpf-in-hpf-out', ...plain },
+      wave: { volume: 'overlap', eq: 'center-bass-swap', filter: 'lpf-in', ...plain },
+      melt: { volume: 'crossfade', eq: 'center-bass-swap', filter: 'hpf-in', ...plain },
+      slam: { volume: 'center-cut', eq: 'none', filter: 'none', ...plain },
+      dissolve: { volume: 'crossfade', eq: 'center-bass-swap', filter: 'lpf-out', effect: 'reverb-out-end', looping: 'none' },
+      surge: { volume: 'fade-in-cut-out', eq: 'end-bass-swap', filter: 'noise-out-end', effect: 'none', looping: 'loop-4' },
+      afterglow: { volume: 'smooth-crossfade', eq: 'center-bass-swap', filter: 'hpf-out', effect: 'echo-three-quarter-out-end', looping: 'none' },
     });
-    expect(PRESET_ORDER).toEqual(['fade', 'blend', 'rise', 'wave', 'melt', 'slam']);
+    expect(PRESET_ORDER).toEqual(['fade', 'blend', 'rise', 'wave', 'melt', 'slam', 'dissolve', 'surge', 'afterglow']);
   });
 });
 

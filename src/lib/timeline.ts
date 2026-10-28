@@ -1,7 +1,8 @@
-import type { EqEvent, FilterEvent, NoiseEvent, TimelineEntry, Track, Transition } from '../types';
+import type { EffectEvent, EqEvent, FilterEvent, LoopEvent, NoiseEvent, TimelineEntry, Track, Transition } from '../types';
 import { volumeSamples } from './curves';
+import { ECHO_FEEDBACK, effectSamples, effectShape, loopJumps } from './effects';
 import { eqSamples, filterSamples, filterWet, highpassHz, lowpassHz, NOISE_LEVEL, noiseHz, type EqSide, type FilterSamples } from './lanes';
-import { barsToSeconds, playbackRateFor, rampAudioSeconds } from './timing';
+import { barsToSeconds, beatSeconds, playbackRateFor, rampAudioSeconds } from './timing';
 
 /** Bars of context played before and after the window in the editor preview. */
 export const PREVIEW_LEAD_BARS = 2;
@@ -19,6 +20,21 @@ function filterEvent(side: FilterSamples | null, time: number, duration: number)
 function noiseEvent(side: FilterSamples | null, time: number, duration: number): NoiseEvent | undefined {
   if (side?.kind !== 'noise') return undefined;
   return { time, duration, level: side.closure.map((a) => NOISE_LEVEL * a), frequency: side.closure.map(noiseHz) };
+}
+
+/** Effect of the outgoing song over its window; A runs at rate 1 there, so its beats set the repeats. */
+function effectEvent(t: Transition, bpmA: number, time: number, duration: number): EffectEvent | undefined {
+  const shape = effectShape(t.effect);
+  const send = effectSamples(t);
+  if (!shape || !send) return undefined;
+  const delay = shape.beats * beatSeconds(bpmA);
+  const feedback = shape.kind === 'echo' ? ECHO_FEEDBACK : 0;
+  return { time, duration, kind: shape.kind, delay, feedback, send, ringsOut: shape.ringsOut };
+}
+
+function loopEvent(t: Transition, bpmA: number, time: number): LoopEvent | undefined {
+  const jumps = loopJumps(t, bpmA, time);
+  return jumps.length > 0 ? { audioStart: t.outStart, jumps } : undefined;
 }
 
 /** A known (context time, audio position) from which the track plays at rate 1. */
@@ -71,6 +87,8 @@ export function buildTimeline(
     current.eqOut = eqEvent(eq.out, tOut, d);
     current.filterOut = filterEvent(filter.out, tOut, d);
     current.noiseOut = noiseEvent(filter.out, tOut, d);
+    current.effectOut = effectEvent(transition, from.bpm, tOut, d);
+    current.loopOut = loopEvent(transition, from.bpm, tOut);
     current.stopAt = tOut + d;
 
     anchor = { time: tOut + 2 * d, audio: transition.inStart + d * r + rampAudioSeconds(d, r) };

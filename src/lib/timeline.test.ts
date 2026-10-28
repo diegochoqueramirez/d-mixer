@@ -148,6 +148,46 @@ describe('buildTimeline with EQ and filter', () => {
   });
 });
 
+describe('buildTimeline with effects and looping', () => {
+  // 120 bpm: a beat is 0.5 s; 4 bars = 8 s.
+  const tracks = [track('a', { bpm: 120 }), track('b', { bpm: 100 })];
+  const build = (overrides: Parameters<typeof transition>[2]) => buildTimeline(tracks, { 'a->b': transition('a', 'b', overrides) }, 0, 0);
+
+  it('Echo ¾ out end repeats every ¾ beat of A and rings on', () => {
+    const [a] = build({ effect: 'echo-three-quarter-out-end' });
+    expect(a.effectOut).toMatchObject({ time: 200, duration: 8, kind: 'echo', feedback: 0.55, ringsOut: true });
+    expect(a.effectOut!.delay).toBeCloseTo(0.375);
+    expect(a.effectOut!.send[0]).toBe(0);
+    expect(a.effectOut!.send.at(-1)).toBeCloseTo(1);
+  });
+
+  it('Delay ½ cut end repeats once, half a beat later, and is cut', () => {
+    const [a] = build({ effect: 'delay-half-cut-end' });
+    expect(a.effectOut).toMatchObject({ kind: 'delay', feedback: 0, ringsOut: false });
+    expect(a.effectOut!.delay).toBeCloseTo(0.25);
+  });
+
+  it('Reverb has no repeats', () => {
+    const [a] = build({ effect: 'reverb-out-end' });
+    expect(a.effectOut).toMatchObject({ kind: 'reverb', delay: 0, feedback: 0, ringsOut: true });
+  });
+
+  it('4 beat loop jumps back to the window start every 4 beats of A', () => {
+    const [a] = build({ looping: 'loop-4' });
+    expect(a.loopOut!.audioStart).toBe(200);
+    expect(a.loopOut!.jumps).toEqual([{ time: 202, duration: 2 }, { time: 204, duration: 2 }, { time: 206, duration: 2 }]);
+  });
+
+  it('the incoming song never gets an effect or a loop', () => {
+    const [, b] = build({ effect: 'echo-one-out-end', looping: 'loop-1' });
+    expect(b.effectOut ?? b.loopOut).toBeUndefined();
+  });
+
+  it('None schedules no effect and no loop', () => {
+    for (const e of build({})) expect(e.effectOut ?? e.loopOut).toBeUndefined();
+  });
+});
+
 describe('buildSequentialTimeline', () => {
   it('plays tracks back to back at rate 1 with no gain curves', () => {
     const entries = buildSequentialTimeline([track('a', { duration: 100 }), track('b', { duration: 50 }), track('c')]);
