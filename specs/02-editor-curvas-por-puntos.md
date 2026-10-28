@@ -233,34 +233,34 @@ src/
 
 ## Criterios de aceptación
 
-- [ ] `npm test` pasa, incluidos los tests nuevos de `src/lib/gainCurve.test.ts`.
-- [ ] Pulsar "Personalizar" muestra los puntos de la curva en ambas ondas y el botón pasa a "Listo".
-- [ ] En modo personalizar, arrastrar sobre una onda no desliza la canción, y el nudge y el overview no responden.
-- [ ] Al entrar en Personalizar desde cualquiera de los 8 estilos, la curva amarilla se ve igual que antes de entrar.
-- [ ] Arrastrar un punto sin Shift lo deja en un beat, un medio beat de A o el centro de la ventana; con Shift queda donde se suelta.
-- [ ] Un punto no puede pasar a la izquierda de su vecino anterior ni a la derecha del siguiente.
-- [ ] Los puntos de los extremos no se mueven en X ni se borran, pero su volumen sí cambia.
-- [ ] Doble clic sobre la curva añade un punto en esa posición; doble clic sobre un punto que no sea extremo lo borra.
-- [ ] Con 32 puntos en una curva, añadir otro no hace nada y aparece "Máximo 32 puntos por curva".
-- [ ] Arrastrar el asa de un tramo arriba o abajo lo curva; doble clic en el asa alterna recto/suave y el asa cambia de relleno.
-- [ ] Con teclado: Tab recorre los puntos de A y luego los de B; ←/→ mueven un beat (Shift: medio); ↑/↓ cambian 5%; Supr borra; Enter añade.
-- [ ] Inicio / Fin enfocan el primer / último punto de la curva.
-- [ ] Alt+←/→ mueve un compás.
-- [ ] `,` / `.` mueven el punto exactamente 10 ms, sin snap.
-- [ ] Shift+↑/↓ cambia el volumen un 25%.
-- [ ] `<` / `>` curvan el tramo siguiente; E alterna recto/suave en ese tramo.
-- [ ] ‹ › y `[` `]` cambian a la transición anterior/siguiente sin cerrar el editor; están deshabilitados en los extremos.
-- [ ] Con cambios sin guardar, cambiar de transición pregunta. "Guardar" guarda y cambia; "Descartar" cambia sin guardar; "Seguir editando" se queda.
-- [ ] Al cambiar de transición, la preview suena en bucle con la nueva y el historial queda vacío.
-- [ ] Tras soltar un arrastre, la preview en bucle se reinicia y se oye la curva nueva.
-- [ ] Con una curva personalizada guardada, el chip dice "Custom" y "Reproducir mezcla" aplica esa curva.
-- [ ] Elegir un preset, un estilo o "Auto" reemplaza la curva personalizada.
-- [ ] "Restablecer curva" vuelve a la curva del estilo actual.
-- [ ] Cambiar los compases conserva la forma de la curva personalizada, estirada a la nueva ventana.
-- [ ] Cmd/Ctrl+Z deshace el último cambio del borrador y Shift+Cmd/Ctrl+Z lo rehace; los botones ↶ ↷ hacen lo mismo y se deshabilitan sin historial.
-- [ ] Un arrastre completo de un punto se deshace con un solo Cmd/Ctrl+Z.
-- [ ] Guardar, descartar o cerrar el editor vacía el historial.
-- [ ] Ningún color está hardcodeado fuera de `src/styles.css`.
+- [x] `npm test` pasa, incluidos los tests nuevos de `src/lib/gainCurve.test.ts`.
+- [x] Pulsar "Personalizar" muestra los puntos de la curva en ambas ondas y el botón pasa a "Listo".
+- [x] En modo personalizar, arrastrar sobre una onda no desliza la canción, y el nudge y el overview no responden.
+- [x] Al entrar en Personalizar desde cualquiera de los 8 estilos, la curva amarilla se ve igual que antes de entrar.
+- [x] Arrastrar un punto sin Shift lo deja en un beat, un medio beat de A o el centro de la ventana; con Shift queda donde se suelta.
+- [x] Un punto no puede pasar a la izquierda de su vecino anterior ni a la derecha del siguiente.
+- [x] Los puntos de los extremos no se mueven en X ni se borran, pero su volumen sí cambia.
+- [x] Doble clic sobre la curva añade un punto en esa posición; doble clic sobre un punto que no sea extremo lo borra.
+- [x] Con 32 puntos en una curva, añadir otro no hace nada y aparece "Máximo 32 puntos por curva".
+- [x] Arrastrar el asa de un tramo arriba o abajo lo curva; doble clic en el asa alterna recto/suave y el asa cambia de relleno.
+- [x] Con teclado: Tab recorre los puntos de A y luego los de B; ←/→ mueven un beat (Shift: medio); ↑/↓ cambian 5%; Supr borra; Enter añade.
+- [x] Inicio / Fin enfocan el primer / último punto de la curva.
+- [x] Alt+←/→ mueve un compás.
+- [x] `,` / `.` mueven el punto exactamente 10 ms, sin snap.
+- [x] Shift+↑/↓ cambia el volumen un 25%.
+- [x] `<` / `>` curvan el tramo siguiente; E alterna recto/suave en ese tramo.
+- [x] ‹ › y `[` `]` cambian a la transición anterior/siguiente sin cerrar el editor; están deshabilitados en los extremos.
+- [x] Con cambios sin guardar, cambiar de transición pregunta. "Guardar" guarda y cambia; "Descartar" cambia sin guardar; "Seguir editando" se queda.
+- [x] Al cambiar de transición, la preview suena en bucle con la nueva y el historial queda vacío.
+- [x] Tras soltar un arrastre, la preview en bucle se reinicia y se oye la curva nueva.
+- [x] Con una curva personalizada guardada, el chip dice "Custom" y "Reproducir mezcla" aplica esa curva.
+- [x] Elegir un preset, un estilo o "Auto" reemplaza la curva personalizada.
+- [x] "Restablecer curva" vuelve a la curva del estilo actual.
+- [x] Cambiar los compases conserva la forma de la curva personalizada, estirada a la nueva ventana.
+- [x] Cmd/Ctrl+Z deshace el último cambio del borrador y Shift+Cmd/Ctrl+Z lo rehace; los botones ↶ ↷ hacen lo mismo y se deshabilitan sin historial.
+- [x] Un arrastre completo de un punto se deshace con un solo Cmd/Ctrl+Z.
+- [x] Guardar, descartar o cerrar el editor vacía el historial.
+- [x] Ningún color está hardcodeado fuera de `src/styles.css`.
 
 ---
 
