@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { track, transition } from './fixtures';
+import { curveFromStyle } from './gainCurve';
 import { audioPositionAt, buildSequentialTimeline, buildTimeline, clipTimeline, incomingAudioAt, previewRange } from './timeline';
 
 describe('buildTimeline', () => {
@@ -93,6 +94,17 @@ describe('incomingAudioAt', () => {
     for (const tau of [0, 3, 8, 10, 12, 16, 20]) {
       expect(incomingAudioAt(tau, 4, d, r)).toBeCloseTo(audioPositionAt(b, 200 + tau));
     }
+  });
+});
+
+describe('buildTimeline with a custom curve', () => {
+  it('applies the hand-drawn gains instead of the style', () => {
+    const customVolume = curveFromStyle('center-cut');
+    const tracks = [track('a', { bpm: 120 }), track('b', { bpm: 120 })];
+    const [a, b] = buildTimeline(tracks, { 'a->b': transition('a', 'b', { volume: 'crossfade', customVolume }) }, 0, 0);
+    const n = a.gainCurveOut!.curve.length;
+    expect(a.gainCurveOut!.curve[Math.floor(n * 0.25)]).toBe(1);
+    expect(b.gainCurveIn!.curve[Math.floor(n * 0.25)]).toBe(0);
   });
 });
 

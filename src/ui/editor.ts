@@ -2,17 +2,28 @@ import type { AppState, BarsOption, Track, TransitionPreset, VolumeStyle } from 
 import { BARS_OPTIONS, PRESET_ORDER, VOLUME_STYLES } from '../types';
 import {
   applyPreset,
+  beginGesture,
   closeEditor,
+  editableCurves,
+  endGesture,
+  goToPair,
   pairsWithDraft,
+  redo,
+  resetCurve,
   resetToAuto,
   saveDraft,
   setVolumeStyle,
+  toggleCustomize,
+  undo,
+  updateCustomCurve,
   updateDraft,
 } from '../state';
-import { chipLabel, PRESETS, sampleCurve, VOLUME_LABELS } from '../lib/curves';
+import { chipLabel, PRESETS, VOLUME_LABELS, volumeSamples } from '../lib/curves';
+import type { PairValidation } from '../lib/validation';
 import { barsToSeconds, playbackRateFor } from '../lib/timing';
 import { formatBpm, formatDuration, formatTime, h, icon, setIcon } from './dom';
 import { createBpmPopover } from './bpmPopover';
+import { createCurveEditor } from './curveEditor';
 import { createMinimap, createStage } from './waveform';
 
 export interface EditorHandlers {
@@ -56,12 +67,27 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
   let incomingId: string | null = null;
   let openPair: number | null = null;
   let lastSignature = '';
+  let pairCount = 0;
+  let limitShown = false;
+  let validation: PairValidation | null = null;
+  /** What the confirmation box is asking about: closing the editor or moving to another pair. */
+  let confirmTarget: { kind: 'close' } | { kind: 'navigate'; pairIndex: number } = { kind: 'close' };
 
   // top bar
   const closeBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Cerrar editor' }, icon('remove'));
+  const undoBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Deshacer', title: 'Deshacer' }, icon('undo'));
+  const redoBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Rehacer', title: 'Rehacer' }, icon('redo'));
+  const prevBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Transición anterior', title: 'Transición anterior' }, icon('prev'));
+  const nextBtn = h('button', { class: 'icon-btn', type: 'button', 'aria-label': 'Transición siguiente', title: 'Transición siguiente' }, icon('next'));
   const title = h('h2', { class: 'editor-title', id: 'editor-title' });
   const saveBtn = h('button', { class: 'save-btn', type: 'button' }, 'Guardar');
-  const bar = h('header', { class: 'editor-bar' }, closeBtn, title, saveBtn);
+  const bar = h(
+    'header',
+    { class: 'editor-bar' },
+    h('div', { class: 'editor-bar-start' }, closeBtn, undoBtn, redoBtn),
+    h('div', { class: 'editor-nav' }, prevBtn, title, nextBtn),
+    saveBtn,
+  );
 
   // overview, decks, stage
   const deckOut = createDeck('out');
@@ -95,20 +121,44 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
 
   const volume = h('select', { class: 'pill-select', id: 'editor-volume' });
   for (const v of VOLUME_STYLES) volume.append(h('option', { value: v }, VOLUME_LABELS[v]));
-  const volumeLane = h('div', { class: 'lane-row' }, h('label', { class: 'lane-label', for: 'editor-volume' }, 'Volumen'), volume);
+  const customOption = h('option', { value: 'custom', disabled: true }, 'Personalizada');
+  volume.append(customOption);
+  const customizeBtn = h('button', { class: 'pill-btn customize-btn', type: 'button', 'aria-pressed': 'false' }, 'Personalizar');
+  const resetCurveBtn = h('button', { class: 'pill-btn', type: 'button' }, 'Restablecer curva');
+  const volumeLane = h(
+    'div',
+    { class: 'lane-row' },
+    h('label', { class: 'lane-label', for: 'editor-volume' }, 'Volumen'),
+    h('div', { class: 'lane-actions' }, volume, customizeBtn, resetCurveBtn),
+  );
 
   const issues = h('ul', { class: 'issues', 'aria-live': 'polite' });
 
-  // discard confirmation
+  // confirmation (close with changes, or move to another pair with changes)
+  const confirmTitle = h('p', { class: 'confirm-title', id: 'confirm-title' });
   const keepBtn = h('button', { class: 'pill-btn', type: 'button' }, 'Seguir editando');
   const discardBtn = h('button', { class: 'danger-btn', type: 'button' }, 'Descartar');
+  const confirmSaveBtn = h('button', { class: 'save-btn', type: 'button' }, 'Guardar');
   const confirm = h(
     'div',
     { class: 'confirm', role: 'alertdialog', 'aria-labelledby': 'confirm-title', hidden: true },
-    h('div', { class: 'confirm-box' }, h('p', { class: 'confirm-title', id: 'confirm-title' }, '¿Descartar cambios?'), h('div', { class: 'confirm-actions' }, keepBtn, discardBtn)),
+    h('div', { class: 'confirm-box' }, confirmTitle, h('div', { class: 'confirm-actions' }, keepBtn, discardBtn, confirmSaveBtn)),
   );
 
   const popover = createBpmPopover();
+
+  const curveEditor = createCurveEditor(stage, {
+    onChange: updateCustomCurve,
+    onGestureStart: beginGesture,
+    onGestureEnd: () => {
+      endGesture();
+      restartAfterDrag();
+    },
+    onLimit: () => {
+      limitShown = true;
+      renderIssues();
+    },
+  });
 
   const body = h(
     'div',
@@ -128,25 +178,75 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
 
   // ---------- behaviour ----------
 
+  function askConfirm(target: typeof confirmTarget) {
+    confirmTarget = target;
+    const navigating = target.kind === 'navigate';
+    confirmTitle.textContent = navigating ? '¿Guardar cambios antes de cambiar de transición?' : '¿Descartar cambios?';
+    confirmSaveBtn.hidden = !navigating;
+    confirm.hidden = false;
+    (navigating ? confirmSaveBtn : keepBtn).focus();
+  }
+
   function requestClose() {
-    if (state?.editor?.dirty) {
-      confirm.hidden = false;
-      keepBtn.focus();
-    } else {
-      closeEditor();
-    }
+    if (state?.editor?.dirty) askConfirm({ kind: 'close' });
+    else closeEditor();
+  }
+
+  function requestPair(pairIndex: number) {
+    const editor = state?.editor;
+    if (!editor || pairIndex < 0 || pairIndex >= pairCount || pairIndex === editor.pairIndex) return;
+    if (editor.dirty) askConfirm({ kind: 'navigate', pairIndex });
+    else goToPair(pairIndex, false);
   }
 
   closeBtn.addEventListener('click', requestClose);
   saveBtn.addEventListener('click', saveDraft);
+  undoBtn.addEventListener('click', undo);
+  redoBtn.addEventListener('click', redo);
+  prevBtn.addEventListener('click', () => state?.editor && requestPair(state.editor.pairIndex - 1));
+  nextBtn.addEventListener('click', () => state?.editor && requestPair(state.editor.pairIndex + 1));
+  customizeBtn.addEventListener('click', toggleCustomize);
+  resetCurveBtn.addEventListener('click', resetCurve);
   keepBtn.addEventListener('click', () => {
     confirm.hidden = true;
     closeBtn.focus();
   });
   discardBtn.addEventListener('click', () => {
     confirm.hidden = true;
-    closeEditor();
+    if (confirmTarget.kind === 'navigate') goToPair(confirmTarget.pairIndex, false);
+    else closeEditor();
   });
+  confirmSaveBtn.addEventListener('click', () => {
+    confirm.hidden = true;
+    if (confirmTarget.kind === 'navigate') goToPair(confirmTarget.pairIndex, true);
+  });
+
+  // Shortcuts: undo/redo and [ ] between pairs. Never while typing in a field.
+  dialog.addEventListener('keydown', (e) => {
+    const target = e.target as HTMLElement;
+    if (target.closest('input, select, textarea') || !confirm.hidden || !state?.editor) return;
+    const mod = e.metaKey || e.ctrlKey;
+    if (mod && e.key.toLowerCase() === 'z') {
+      if (e.shiftKey) redo();
+      else undo();
+    } else if (!mod && e.key === '[') {
+      requestPair(state.editor.pairIndex - 1);
+    } else if (!mod && e.key === ']') {
+      requestPair(state.editor.pairIndex + 1);
+    } else {
+      return;
+    }
+    e.preventDefault();
+  });
+
+  function renderIssues() {
+    if (!validation) return;
+    issues.replaceChildren(
+      ...validation.errors.map((e) => h('li', { class: 'issue issue--error' }, e.message)),
+      ...validation.warnings.map((w) => h('li', { class: 'issue issue--warning' }, w.message)),
+      ...(limitShown ? [h('li', { class: 'issue issue--warning' }, 'Máximo 32 puntos por curva')] : []),
+    );
+  }
   dialog.addEventListener('cancel', (e) => {
     e.preventDefault();
     if (popover.isOpen()) popover.close();
@@ -183,6 +283,8 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
       if (!editor) {
         incomingId = null;
         lastSignature = '';
+        limitShown = false;
+        curveEditor.update(null, false);
         popover.close();
         confirm.hidden = true;
         if (dialog.open) {
@@ -197,17 +299,24 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
 
       const justOpened = !dialog.open;
       if (justOpened) dialog.showModal();
+      // Opening the editor or moving to another pair both start the preview of the new pair.
+      const pairChanged = justOpened || openPair !== editor.pairIndex;
       openPair = editor.pairIndex;
 
       const { tracks, pairs, validations } = pairsWithDraft(next);
       const from = tracks[editor.pairIndex];
       const to = tracks[editor.pairIndex + 1];
-      const validation = validations[editor.pairIndex];
+      validation = validations[editor.pairIndex];
       const t = editor.draft;
       incomingId = to.id;
+      pairCount = pairs.length;
 
       title.textContent = `Transición ${editor.pairIndex + 1} de ${pairs.length}`;
       saveBtn.disabled = false;
+      prevBtn.disabled = editor.pairIndex === 0;
+      nextBtn.disabled = editor.pairIndex >= pairs.length - 1;
+      undoBtn.disabled = editor.past.length === 0;
+      redoBtn.disabled = editor.future.length === 0;
 
       // presets: Auto, the matching preset, or none when Custom
       const label = chipLabel(t);
@@ -216,12 +325,12 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         b.setAttribute('aria-pressed', String(active));
       }
       bars.value = String(t.bars);
-      volume.value = t.volume;
-
-      issues.replaceChildren(
-        ...validation.errors.map((e) => h('li', { class: 'issue issue--error' }, e.message)),
-        ...validation.warnings.map((w) => h('li', { class: 'issue issue--warning' }, w.message)),
-      );
+      volume.value = t.customVolume ? 'custom' : t.volume;
+      customOption.hidden = !t.customVolume;
+      customizeBtn.textContent = editor.customizing ? 'Listo' : 'Personalizar';
+      customizeBtn.setAttribute('aria-pressed', String(editor.customizing));
+      resetCurveBtn.hidden = !editor.customizing;
+      resetCurveBtn.disabled = !t.customVolume;
 
       const previewing = next.playback === 'previewing';
       if (!previewing) stage.setPlayhead(null);
@@ -240,10 +349,11 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         stage.el.hidden = true;
         overview.hidden = true;
         stage.draw(null);
+        curveEditor.update(null, false);
       } else {
         const d = barsToSeconds(t.bars, from.bpm!);
         const r = playbackRateFor(from.bpm!, to.bpm!);
-        const gains = sampleCurve(t.volume);
+        const gains = volumeSamples(t);
         fillDeck(deckOut, from, `Sale en ${formatTime(t.outStart)}`);
         fillDeck(deckIn, to, `Entra en ${formatTime(t.inStart)}, a ${r.toFixed(3)}× durante la transición`);
         stageEmpty.hidden = true;
@@ -254,15 +364,23 @@ export function mountEditor(dialog: HTMLDialogElement, handlers: EditorHandlers)
         stage.draw({ from: stageFrom, to: stageTo, outStart: t.outStart, inStart: t.inStart, d, r, gainOut: gains.out, gainIn: gains.in });
         miniOut.draw({ ...stageFrom, windowStart: t.outStart, windowLength: d });
         miniIn.draw({ ...stageTo, windowStart: t.inStart, windowLength: d * r });
+        stage.setCustomizing(editor.customizing);
+        overview.classList.toggle('is-locked', editor.customizing);
+        curveEditor.update({ curves: editableCurves(t), bars: t.bars, d }, editor.customizing);
       }
 
-      // autoplay on open; restart the loop when the draft (or the tracks' tempo) changes
-      const signature = JSON.stringify([t, from.bpm, from.firstBeatOffset, to.bpm, to.firstBeatOffset]);
+      // autoplay on open / pair change; restart the loop when the draft (or the tracks' tempo) changes
+      const signature = JSON.stringify([editor.pairIndex, t, from.bpm, from.firstBeatOffset, to.bpm, to.firstBeatOffset]);
       const changed = signature !== lastSignature;
       lastSignature = signature;
-      if (justOpened) {
+      if (changed) limitShown = false;
+      renderIssues();
+      const dragging = stage.isDragging() || miniOut.isDragging() || miniIn.isDragging() || curveEditor.isDragging();
+      if (pairChanged) {
+        // An invalid pair never autoplays; when moving between pairs, the previous preview stops.
         if (validation.ok) queueMicrotask(handlers.onPreview);
-      } else if (changed && previewing && !stage.isDragging() && !miniOut.isDragging() && !miniIn.isDragging()) {
+        else if (!justOpened) queueMicrotask(handlers.onStop);
+      } else if (changed && previewing && !dragging) {
         queueMicrotask(validation.ok ? handlers.onPreview : handlers.onStop);
       }
     },

@@ -24,6 +24,8 @@ const ICONS = {
   prev: '<path d="M14.5 6l-6 6 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
   next: '<path d="M9.5 6l6 6-6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
   add: '<path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round" fill="none"/>',
+  undo: '<path d="M9 7L5 11l4 4M5 11h9a5 5 0 010 10h-2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
+  redo: '<path d="M15 7l4 4-4 4M19 11h-9a5 5 0 000 10h2" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>',
 };
 
 export type IconName = keyof typeof ICONS;

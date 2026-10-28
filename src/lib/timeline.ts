@@ -1,5 +1,5 @@
 import type { TimelineEntry, Track, Transition } from '../types';
-import { sampleCurve } from './curves';
+import { volumeSamples } from './curves';
 import { barsToSeconds, playbackRateFor, rampAudioSeconds } from './timing';
 
 /** Bars of context played before and after the window in the editor preview. */
@@ -47,7 +47,7 @@ export function buildTimeline(
 
     const d = barsToSeconds(transition.bars, from.bpm);
     const r = playbackRateFor(from.bpm, to.bpm);
-    const curve = sampleCurve(transition.volume);
+    const curve = volumeSamples(transition);
 
     current.gainCurveOut = { time: tOut, duration: d, curve: curve.out };
     current.stopAt = tOut + d;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { VOLUME_STYLES } from '../types';
-import { CURVE_SAMPLES, chipLabel, curveGain, PRESETS, sampleCurve } from './curves';
+import { CURVE_SAMPLES, chipLabel, curveGain, PRESETS, sampleCurve, volumeSamples } from './curves';
+import { curveFromStyle } from './gainCurve';
 
 describe('curveGain', () => {
   it('smooth-crossfade keeps constant power', () => {
@@ -79,15 +80,32 @@ describe('sampleCurve', () => {
 
 describe('chipLabel', () => {
   it('says Auto while the transition is automatic', () => {
-    expect(chipLabel({ auto: true, preset: 'fade', volume: 'smooth-crossfade' })).toBe('Auto');
+    expect(chipLabel({ auto: true, preset: 'fade', volume: 'smooth-crossfade', customVolume: null })).toBe('Auto');
   });
 
   it('names the preset when the volume matches it', () => {
-    expect(chipLabel({ auto: false, preset: 'slam', volume: PRESETS.slam.volume })).toBe('Slam');
+    expect(chipLabel({ auto: false, preset: 'slam', volume: PRESETS.slam.volume, customVolume: null })).toBe('Slam');
   });
 
   it('says Custom when the volume was changed by hand or no preset was picked', () => {
-    expect(chipLabel({ auto: false, preset: 'fade', volume: 'overlap' })).toBe('Custom');
-    expect(chipLabel({ auto: false, preset: null, volume: 'crossfade' })).toBe('Custom');
+    expect(chipLabel({ auto: false, preset: 'fade', volume: 'overlap', customVolume: null })).toBe('Custom');
+    expect(chipLabel({ auto: false, preset: null, volume: 'crossfade', customVolume: null })).toBe('Custom');
+  });
+
+  it('says Custom when the curve was drawn by hand, even if the style matches a preset', () => {
+    const customVolume = curveFromStyle('smooth-crossfade');
+    expect(chipLabel({ auto: false, preset: 'fade', volume: 'smooth-crossfade', customVolume })).toBe('Custom');
+  });
+});
+
+describe('volumeSamples', () => {
+  it('uses the style when there is no custom curve', () => {
+    expect(volumeSamples({ volume: 'crossfade', customVolume: null }, 5).out).toEqual(sampleCurve('crossfade', 5).out);
+  });
+
+  it('uses the hand-drawn curves when present', () => {
+    const customVolume = curveFromStyle('center-cut');
+    const s = volumeSamples({ volume: 'crossfade', customVolume }, 3);
+    expect([...s.out]).toEqual([1, 0, 0]);
   });
 });

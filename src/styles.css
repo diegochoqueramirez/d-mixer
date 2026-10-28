@@ -457,10 +457,25 @@ button:disabled {
   border-bottom: 1px solid var(--border);
 }
 
+.editor-bar-start,
+.editor-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.editor-nav {
+  justify-content: center;
+  min-width: 0;
+}
+
 .editor-title {
+  overflow: hidden;
   font-size: var(--step-0);
   font-weight: 700;
   text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .save-btn {
@@ -718,6 +733,115 @@ button:disabled {
 
 .lane-label {
   font-weight: 600;
+}
+
+.lane-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.customize-btn {
+  padding-left: 16px;
+}
+
+.customize-btn[aria-pressed="true"] {
+  background: var(--text);
+  color: var(--bg);
+}
+
+.customize-btn[aria-pressed="true"]:hover {
+  background: color-mix(in srgb, var(--text), var(--bg) 12%);
+}
+
+/* ---------- Personalizar: curve editor ---------- */
+
+.stage-view.is-customizing .lane-hit {
+  pointer-events: none;
+}
+
+.stage-view.is-customizing .nudge {
+  display: none;
+}
+
+.overview.is-locked {
+  pointer-events: none;
+  opacity: 0.5;
+}
+
+.curve-editor {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.curve-area {
+  position: absolute;
+  cursor: crosshair;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.curve-point,
+.curve-handle {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin: -14px 0 0 -14px;
+  border: 0;
+  background: transparent;
+  cursor: grab;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.curve-point.is-dragging,
+.curve-handle.is-dragging {
+  cursor: grabbing;
+}
+
+.curve-point::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--surface);
+  border-radius: 50%;
+  background: var(--gain-curve);
+  box-sizing: content-box;
+}
+
+.curve-handle {
+  z-index: 0;
+}
+
+.curve-handle::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border: 2px solid var(--gain-curve);
+  background: var(--surface);
+}
+
+.curve-handle.is-eased::before {
+  background: var(--gain-curve);
+}
+
+.curve-point:hover::before,
+.curve-point:focus-visible::before,
+.curve-handle:hover::before,
+.curve-handle:focus-visible::before {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
+}
+
+.curve-point:focus-visible,
+.curve-handle:focus-visible {
+  outline: none;
 }
 
 .issues {

@@ -1,5 +1,6 @@
-import type { AppState, Track, Transition, TransitionPreset, VolumeStyle } from './types';
+import type { AppState, EditorState, GainCurve, Track, Transition, TransitionPreset, VolumeStyle } from './types';
 import { PRESETS } from './lib/curves';
+import { curveFromStyle } from './lib/gainCurve';
 import { barsToSeconds, snapToBeat } from './lib/timing';
 import { validateQueue, type Pair, type PairValidation } from './lib/validation';
 
@@ -77,6 +78,7 @@ export function defaultTransition(from: Track, to: Track): Transition {
     volume: PRESETS.fade.volume,
     preset: 'fade',
     auto: true,
+    customVolume: null,
   };
 }
 
@@ -91,7 +93,8 @@ function sameTransition(a: Transition, b: Transition): boolean {
     a.bars === b.bars &&
     a.volume === b.volume &&
     a.preset === b.preset &&
-    a.auto === b.auto
+    a.auto === b.auto &&
+    JSON.stringify(a.customVolume) === JSON.stringify(b.customVolume)
   );
 }
 
@@ -133,29 +136,52 @@ function normalize(s: AppState): AppState {
 
 // ---------- editor actions ----------
 
-function editorPair(s: AppState) {
-  if (!s.editor) return null;
+const HISTORY_LIMIT = 100;
+
+/** While a pointer gesture is open, only its first change is recorded in the undo history. */
+let gesture: { open: boolean; recorded: boolean } = { open: false, recorded: false };
+
+export function beginGesture(): void {
+  gesture = { open: true, recorded: false };
+}
+
+export function endGesture(): void {
+  gesture = { open: false, recorded: false };
+}
+
+function freshEditor(pairIndex: number, saved: Transition, customizing: boolean): EditorState {
+  return { pairIndex, draft: { ...saved }, dirty: false, customizing, past: [], future: [] };
+}
+
+function savedFor(s: AppState, pairIndex: number): Transition | undefined {
   const tracks = queueTracks(s);
-  return { from: tracks[s.editor.pairIndex], to: tracks[s.editor.pairIndex + 1] };
+  const from = tracks[pairIndex];
+  const to = tracks[pairIndex + 1];
+  return from && to ? s.transitions[pairKey(from.id, to.id)] : undefined;
 }
 
 export function openEditor(pairIndex: number): void {
   setState((s) => {
-    const tracks = queueTracks(s);
-    const from = tracks[pairIndex];
-    const to = tracks[pairIndex + 1];
-    const saved = from && to ? s.transitions[pairKey(from.id, to.id)] : undefined;
-    if (!saved) return {};
-    return { editor: { pairIndex, draft: { ...saved }, dirty: false } };
+    const saved = savedFor(s, pairIndex);
+    return saved ? { editor: freshEditor(pairIndex, saved, false) } : {};
   });
 }
 
+/** Replaces the draft and records the previous one in the undo history. */
+function commitDraft(s: AppState, next: Transition): Partial<AppState> {
+  if (!s.editor) return {};
+  const e = s.editor;
+  if (sameTransition(e.draft, next)) return {};
+  let past = e.past;
+  if (!gesture.open || !gesture.recorded) {
+    past = [...e.past, e.draft].slice(-HISTORY_LIMIT);
+    if (gesture.open) gesture.recorded = true;
+  }
+  return { editor: { ...e, draft: next, past, future: [] } };
+}
+
 function editDraft(change: (draft: Transition) => Partial<Transition>): void {
-  setState((s) => {
-    if (!s.editor) return {};
-    const draft = { ...s.editor.draft, ...change(s.editor.draft) };
-    return { editor: { ...s.editor, draft } };
-  });
+  setState((s) => (s.editor ? commitDraft(s, { ...s.editor.draft, ...change(s.editor.draft) }) : {}));
 }
 
 /** Moving points or bars leaves Auto but keeps the preset name if the volume still matches. */
@@ -164,18 +190,54 @@ export function updateDraft(patch: Partial<Pick<Transition, 'outStart' | 'inStar
 }
 
 export function applyPreset(preset: TransitionPreset): void {
-  editDraft(() => ({ preset, volume: PRESETS[preset].volume, auto: false }));
+  editDraft(() => ({ preset, volume: PRESETS[preset].volume, customVolume: null, auto: false }));
 }
 
 export function setVolumeStyle(volume: VolumeStyle): void {
-  editDraft(() => ({ volume, auto: false }));
+  editDraft(() => ({ volume, customVolume: null, auto: false }));
 }
 
 export function resetToAuto(): void {
   setState((s) => {
-    const pair = editorPair(s);
-    if (!s.editor || !pair?.from || !pair.to) return {};
-    return { editor: { ...s.editor, draft: defaultTransition(pair.from, pair.to) } };
+    const tracks = queueTracks(s);
+    if (!s.editor) return {};
+    const from = tracks[s.editor.pairIndex];
+    const to = tracks[s.editor.pairIndex + 1];
+    return from && to ? commitDraft(s, defaultTransition(from, to)) : {};
+  });
+}
+
+/** Curves being edited: the hand-drawn ones, or the ones that reproduce the current style. */
+export function editableCurves(t: Transition) {
+  return t.customVolume ?? curveFromStyle(t.volume);
+}
+
+export function updateCustomCurve(lane: 'out' | 'in', curve: GainCurve): void {
+  editDraft((d) => ({ customVolume: { ...editableCurves(d), [lane]: curve }, auto: false }));
+}
+
+/** Back to the curve of the current volume style. */
+export function resetCurve(): void {
+  editDraft(() => ({ customVolume: null }));
+}
+
+export function toggleCustomize(): void {
+  setState((s) => (s.editor ? { editor: { ...s.editor, customizing: !s.editor.customizing } } : {}));
+}
+
+export function undo(): void {
+  setState((s) => {
+    const e = s.editor;
+    if (!e || e.past.length === 0) return {};
+    return { editor: { ...e, draft: e.past[e.past.length - 1], past: e.past.slice(0, -1), future: [e.draft, ...e.future] } };
+  });
+}
+
+export function redo(): void {
+  setState((s) => {
+    const e = s.editor;
+    if (!e || e.future.length === 0) return {};
+    return { editor: { ...e, draft: e.future[0], past: [...e.past, e.draft].slice(-HISTORY_LIMIT), future: e.future.slice(1) } };
   });
 }
 
@@ -189,6 +251,17 @@ export function saveDraft(): void {
 
 export function closeEditor(): void {
   setState({ editor: null });
+}
+
+/** Switches the open editor to another pair, optionally saving the current draft first. Keeps Personalizar on. */
+export function goToPair(pairIndex: number, save: boolean): void {
+  setState((s) => {
+    if (!s.editor) return {};
+    const { draft, customizing } = s.editor;
+    const transitions = save ? { ...s.transitions, [pairKey(draft.fromId, draft.toId)]: draft } : s.transitions;
+    const saved = savedFor({ ...s, transitions }, pairIndex);
+    return saved ? { transitions, editor: freshEditor(pairIndex, saved, customizing) } : {};
+  });
 }
 
 export function setMixEnabled(mixEnabled: boolean): void {

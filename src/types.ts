@@ -25,6 +25,32 @@ export interface Track {
   error?: string;
 }
 
+export interface GainPoint {
+  /** 0..1, position inside the transition window. */
+  x: number;
+  /** 0..1, gain. */
+  y: number;
+}
+
+export interface SegmentShape {
+  /** false = straight, true = smooth (smoothstep). */
+  ease: boolean;
+  /** -1..1; 0 = no bend. */
+  bend: number;
+}
+
+export interface GainCurve {
+  /** Sorted by x; first x = 0, last x = 1; 2..32 points. */
+  points: GainPoint[];
+  /** One shape per segment: segments.length === points.length - 1. */
+  segments: SegmentShape[];
+}
+
+export interface VolumeCurves {
+  out: GainCurve;
+  in: GainCurve;
+}
+
 export interface Transition {
   fromId: string;
   toId: string;
@@ -36,12 +62,20 @@ export interface Transition {
   preset: TransitionPreset | null;
   /** True until someone edits it, or after picking "Auto". */
   auto: boolean;
+  /** Hand-drawn volume curves; null = use the `volume` style. */
+  customVolume: VolumeCurves | null;
 }
 
 export interface EditorState {
   pairIndex: number;
   draft: Transition;
   dirty: boolean;
+  /** "Personalizar" mode: dragging edits curve points instead of sliding the waves. */
+  customizing: boolean;
+  /** Undo history of the draft (max 100). */
+  past: Transition[];
+  /** Redo history of the draft. */
+  future: Transition[];
 }
 
 export interface AppState {

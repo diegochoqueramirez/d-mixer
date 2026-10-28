@@ -1,4 +1,5 @@
 import type { Transition, TransitionPreset, VolumeStyle } from '../types';
+import { sampleGainCurve } from './gainCurve';
 
 export const CURVE_SAMPLES = 256;
 
@@ -67,9 +68,16 @@ export function sampleCurve(style: VolumeStyle, n = CURVE_SAMPLES): SampledCurve
   return { out, in: inn };
 }
 
+/** Gain samples of a transition: its hand-drawn curves when present, otherwise its volume style. */
+export function volumeSamples(t: Pick<Transition, 'volume' | 'customVolume'>, n = CURVE_SAMPLES): SampledCurve {
+  if (t.customVolume) return { out: sampleGainCurve(t.customVolume.out, n), in: sampleGainCurve(t.customVolume.in, n) };
+  return sampleCurve(t.volume, n);
+}
+
 /** Text of the transition chip: "Auto", the preset name, or "Custom". */
-export function chipLabel(t: Pick<Transition, 'auto' | 'preset' | 'volume'>): string {
+export function chipLabel(t: Pick<Transition, 'auto' | 'preset' | 'volume' | 'customVolume'>): string {
   if (t.auto) return 'Auto';
+  if (t.customVolume) return 'Custom';
   if (t.preset !== null && PRESETS[t.preset].volume === t.volume) return PRESETS[t.preset].label;
   return 'Custom';
 }

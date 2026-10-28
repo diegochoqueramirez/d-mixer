@@ -29,6 +29,22 @@ export interface Stage {
   /** Mix time of the playhead (0 = transition start), or null to hide it. */
   setPlayhead(tau: number | null): void;
   isDragging(): boolean;
+  /** Personalizar mode: waves stop sliding, nudge hides and the waves are dimmed inside the window. */
+  setCustomizing(on: boolean): void;
+  /** Pixel layout of the window and lanes, relative to `el`; null until something is drawn. */
+  geometry(): StageGeometry | null;
+  /** Called after every redraw (model change or resize) so overlays can follow the layout. */
+  onLayout(listener: () => void): void;
+}
+
+export interface StageGeometry {
+  /** Left and right edge of the transition window. */
+  x0: number;
+  x1: number;
+  /** Top and height of the outgoing (`out`) and incoming (`in`) lanes. */
+  lanes: Record<'out' | 'in', { top: number; height: number }>;
+  /** Vertical padding inside a lane: gain 1 sits at top + pad, gain 0 at top + height − pad. */
+  pad: number;
 }
 
 export interface MinimapModel {
@@ -201,6 +217,9 @@ export function createStage(
   const canvas = h('canvas', { class: 'stage-canvas', 'aria-hidden': 'true' });
   let model: StageModel | null = null;
   let playhead: number | null = null;
+  let customizing = false;
+  let layout: StageGeometry | null = null;
+  const layoutListeners: (() => void)[] = [];
 
   const span = () => (model ? model.d / WINDOW_FRACTION : 1);
   const secondsPerPx = () => span() / Math.max(1, canvas.clientWidth);
@@ -251,11 +270,15 @@ export function createStage(
     h('div', { class: 'stage-center' }, center),
   );
 
-  function render() {
+  /** `notify` is false for playhead-only redraws, which never change the layout. */
+  function render(notify = true) {
     const g = prepare(canvas);
     const w = canvas.clientWidth;
     const hh = canvas.clientHeight;
-    if (!model || w === 0) return;
+    if (!model || w === 0) {
+      layout = null;
+      return;
+    }
     tokens ??= readTokens();
     const tk = tokens;
     const m = model;
@@ -267,6 +290,7 @@ export function createStage(
     const x1 = xAt(m.d);
 
     const laneH = Math.round(hh * 0.4);
+    layout = { x0, x1, lanes: { out: { top: 0, height: laneH }, in: { top: hh - laneH, height: laneH } }, pad: LANE_PAD };
     const lanes = [
       { top: 0, track: m.from, audioAt: (tau: number) => m.outStart + tau, gain: m.gainOut },
       { top: hh - laneH, track: m.to, audioAt: (tau: number) => incomingAudioAt(tau, m.inStart, m.d, m.r), gain: m.gainIn },
@@ -295,9 +319,12 @@ export function createStage(
         const audio = lane.audioAt(tau);
         if (audio < 0 || audio > lane.track.duration) continue;
         const barH = Math.max(1, peakAt(lane.track, audio) * amp);
-        g.fillStyle = tau >= 0 && tau <= m.d ? tk.wave : tk.waveDim;
+        const inside = tau >= 0 && tau <= m.d;
+        g.fillStyle = inside ? tk.wave : tk.waveDim;
+        g.globalAlpha = inside && customizing ? 0.6 : 1;
         g.fillRect(x, mid - barH, BAR_WIDTH, barH * 2);
       }
+      g.globalAlpha = 1;
 
       g.strokeStyle = tk.windowFrame;
       g.lineWidth = 2;
@@ -325,9 +352,10 @@ export function createStage(
         g.fillRect(Math.round(x) - 1, 0, 2, hh);
       }
     }
+    if (notify) layoutListeners.forEach((l) => l());
   }
 
-  new ResizeObserver(render).observe(canvas);
+  new ResizeObserver(() => render()).observe(canvas);
 
   return {
     el,
@@ -342,9 +370,21 @@ export function createStage(
     setPlayhead(tau) {
       if (tau === playhead) return;
       playhead = tau;
-      render();
+      render(false);
     },
     isDragging: () => out.isDragging() || inn.isDragging(),
+    setCustomizing(on) {
+      if (on === customizing) return;
+      customizing = on;
+      el.classList.toggle('is-customizing', on);
+      for (const lane of [out.el, inn.el]) lane.tabIndex = on ? -1 : 0;
+      for (const b of el.querySelectorAll<HTMLButtonElement>('.nudge')) b.tabIndex = on ? -1 : 0;
+      render();
+    },
+    geometry: () => layout,
+    onLayout(listener) {
+      layoutListeners.push(listener);
+    },
   };
 }
 
